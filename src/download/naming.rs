@@ -1,0 +1,155 @@
+//! Output path construction: smart library organization and track indexing.
+//!
+//! When smart organization is enabled the path follows
+//! `{root}/{Artist}/{Album (Year)}/Disc N/{index} - {Title}.ext`
+//! (the `Disc N` segment is omitted for single-disc releases).
+//! When disabled the file is placed flat in the root directory.
+
+use std::path::{Path, PathBuf};
+
+use crate::tags::TrackMetadata;
+
+/// Characters forbidden in Windows file names (and problematic on other platforms too).
+const FORBIDDEN: &[char] = &['<', '>', ':', '"', '/', '\\', '|', '?', '*'];
+
+const MAX_COMPONENT_LEN: usize = 150;
+
+/// Strips forbidden filesystem characters, collapses repeated spaces, and trims trailing
+/// dots/spaces (disallowed on Windows) to produce a safe file or directory name component.
+#[must_use]
+pub fn sanitize(component: &str) -> String {
+    let mut cleaned: String = component
+        .chars()
+        .map(|c| {
+            if FORBIDDEN.contains(&c) || c.is_control() {
+                ' '
+            } else {
+                c
+            }
+        })
+        .collect();
+    while cleaned.contains("  ") {
+        cleaned = cleaned.replace("  ", " ");
+    }
+    let trimmed = cleaned.trim().trim_end_matches('.').trim();
+    let mut result: String = trimmed.chars().take(MAX_COMPONENT_LEN).collect();
+    if result.is_empty() {
+        result.push('_');
+    }
+    result
+}
+
+/// Formats a track number with leading zeros. The width matches the digit count of
+/// `total_tracks` (minimum 2) so alphabetic and numeric sort orders agree.
+#[must_use]
+pub fn format_index(track_number: u32, total_tracks: Option<u32>) -> String {
+    let width = total_tracks
+        .map(|t| t.to_string().len().max(2))
+        .unwrap_or(2);
+    format!("{track_number:0width$}")
+}
+
+/// Builds the full output path for a track according to the current organization settings.
+///
+/// * `root` — download root directory from settings;
+/// * `smart_organization` — arrange into `Artist/Album (Year)/Disc N` subdirectories;
+/// * `track_indexing` — prepend a numeric index to the file name;
+/// * `extension` — final file extension (`mp3`, `flac`, or `m4a`).
+#[must_use]
+pub fn build_path(
+    root: &Path,
+    meta: &TrackMetadata,
+    smart_organization: bool,
+    track_indexing: bool,
+    extension: &str,
+) -> PathBuf {
+    let mut path = root.to_path_buf();
+
+    if smart_organization {
+        let artist = meta
+            .album_artist
+            .clone()
+            .unwrap_or_else(|| meta.joined_artists());
+        path.push(sanitize(&artist));
+
+        let album_dir = match meta.year {
+            Some(year) => format!(
+                "{} ({year})",
+                meta.album.as_deref().unwrap_or("Unknown Album")
+            ),
+            None => meta
+                .album
+                .clone()
+                .unwrap_or_else(|| "Unknown Album".to_owned()),
+        };
+        path.push(sanitize(&album_dir));
+
+        if let (Some(disc), Some(total)) = (meta.disc_number, meta.total_discs)
+            && total > 1
+        {
+            path.push(format!("Disc {disc}"));
+        }
+    }
+
+    let mut file_name = String::new();
+    if track_indexing && let Some(track_number) = meta.track_number {
+        file_name.push_str(&format_index(track_number, meta.total_tracks));
+        file_name.push_str(" - ");
+    }
+    file_name.push_str(&sanitize(&meta.title));
+    file_name.push('.');
+    file_name.push_str(extension);
+
+    path.push(file_name);
+    path
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample() -> TrackMetadata {
+        TrackMetadata {
+            title: "The Things You Say".to_owned(),
+            artists: vec!["Gigi D'Agostino".to_owned()],
+            album_artist: Some("Gigi D'Agostino".to_owned()),
+            album: Some("L'Amour Toujours".to_owned()),
+            year: Some(1999),
+            track_number: Some(3),
+            total_tracks: Some(14),
+            disc_number: Some(1),
+            total_discs: Some(2),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn smart_path_with_disc() {
+        let path = build_path(Path::new("/music"), &sample(), true, true, "flac");
+        let expected = Path::new("/music")
+            .join("Gigi D'Agostino")
+            .join("L'Amour Toujours (1999)")
+            .join("Disc 1")
+            .join("03 - The Things You Say.flac");
+        assert_eq!(path, expected);
+    }
+
+    #[test]
+    fn flat_path_no_indexing() {
+        let path = build_path(Path::new("/music"), &sample(), false, false, "mp3");
+        assert_eq!(path, Path::new("/music").join("The Things You Say.mp3"));
+    }
+
+    #[test]
+    fn sanitizes_forbidden_chars() {
+        assert_eq!(sanitize("AC/DC: Back?"), "AC DC Back");
+    }
+
+    #[test]
+    fn single_disc_has_no_disc_folder() {
+        let mut meta = sample();
+        meta.total_discs = Some(1);
+        let path = build_path(Path::new("/music"), &meta, true, false, "m4a");
+        assert!(!path.to_string_lossy().contains("Disc"));
+    }
+}

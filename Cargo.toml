@@ -1,0 +1,101 @@
+[package]
+name = "ymusic-downloader"
+version = "0.1.0"
+edition = "2024"
+description = "Native desktop client for downloading music from Yandex Music for personal offline listening by active subscribers"
+license = "MIT"
+publish = false
+
+[dependencies]
+# GUI
+egui = "0.35.0"
+eframe = { version = "0.35.0", features = [
+    "glow",
+    "persistence",
+    "default_fonts",
+    "wayland",
+    "x11",
+] }
+image = { version = "0.25", default-features = false, features = [
+    "png",
+    "jpeg",
+] }
+
+# Async runtime
+tokio = { version = "1.52.3", features = [
+    "rt-multi-thread",
+    "macros",
+    "fs",
+    "time",
+    "sync",
+    "io-util",
+] }
+
+# HTTP client
+reqwest = { version = "0.13.4", default-features = false, features = [
+    "json",
+    "stream",
+    "gzip",
+    "brotli",
+    "rustls",
+    "http2",
+    "multipart",
+    "form",
+] }
+
+# Serialization
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.150"
+
+# Error handling
+thiserror = "2.0.18"
+anyhow = "1.0.103"
+
+# Cryptography (HMAC-SHA256 signing + AES-128-CTR decryption of `encraw` transport)
+hmac = "0.13.0"
+sha2 = "0.11.0"
+base64 = "0.22.1"
+hex = "0.4.3"
+aes = "0.9.1"
+ctr = "0.10.1"
+
+# Audio tagging
+id3 = "1.17.0"
+metaflac = "0.2.8"
+mp4ameta = "0.13.0"
+
+# MP4 parsing, used to demux FLAC-in-MP4 (`flac-mp4` codec) containers
+mp4parse = "0.17.0"
+
+# Filesystem / OS integration
+dirs = "6.0.0"
+rfd = "0.17.2"
+open = "5.3.6"
+
+# Logging
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+
+# Identifiers (X-Yandex-Music-Device uuid, X-Request-Id)
+uuid = { version = "1.23.4", features = ["v4", "serde"] }
+url = "2.5.8"
+mac_address = "1.1.8"
+gethostname = "1.1.0"
+sysinfo = "0.39.5"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true
+
+[profile.dev.package."*"]
+opt-level = 2
+
+[build-dependencies]
+image = { version = "0.25", default-features = false, features = [
+    "png",
+    "ico",
+] }
+winresource = "0.1.31"
