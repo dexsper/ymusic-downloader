@@ -11,9 +11,6 @@ permissions:
 jobs:
   release:
     runs-on: windows-latest
-    defaults:
-      run:
-        working-directory: ymusic-downloader
 
     steps:
       - uses: actions/checkout@v4
@@ -24,8 +21,8 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            ymusic-downloader/target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('ymusic-downloader/Cargo.lock') }}
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Build release binary
         run: cargo build --release
