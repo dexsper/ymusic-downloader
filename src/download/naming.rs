@@ -52,7 +52,8 @@ pub fn format_index(track_number: u32, total_tracks: Option<u32>) -> String {
 /// Builds the full output path for a track according to the current organization settings.
 ///
 /// * `root` — download root directory from settings;
-/// * `smart_organization` — arrange into `Artist/Album (Year)/Disc N` subdirectories;
+/// * `smart_organization` — arrange into `Artist/Album/Disc N` subdirectories;
+/// * `album_year_in_folder` — append the release year to the album folder: `Album (Year)`;
 /// * `track_indexing` — prepend a numeric index to the file name;
 /// * `extension` — final file extension (`mp3`, `flac`, or `m4a`).
 #[must_use]
@@ -60,6 +61,7 @@ pub fn build_path(
     root: &Path,
     meta: &TrackMetadata,
     smart_organization: bool,
+    album_year_in_folder: bool,
     track_indexing: bool,
     extension: &str,
 ) -> PathBuf {
@@ -72,15 +74,14 @@ pub fn build_path(
             .unwrap_or_else(|| meta.joined_artists());
         path.push(sanitize(&artist));
 
-        let album_dir = match meta.year {
-            Some(year) => format!(
-                "{} ({year})",
-                meta.album.as_deref().unwrap_or("Unknown Album")
-            ),
-            None => meta
-                .album
-                .clone()
-                .unwrap_or_else(|| "Unknown Album".to_owned()),
+        let album_name = meta.album.as_deref().unwrap_or("Unknown Album");
+        let album_dir = if album_year_in_folder {
+            match meta.year {
+                Some(year) => format!("{album_name} ({year})"),
+                None => album_name.to_owned(),
+            }
+        } else {
+            album_name.to_owned()
         };
         path.push(sanitize(&album_dir));
 
@@ -124,8 +125,8 @@ mod tests {
     }
 
     #[test]
-    fn smart_path_with_disc() {
-        let path = build_path(Path::new("/music"), &sample(), true, true, "flac");
+    fn smart_path_with_disc_and_year() {
+        let path = build_path(Path::new("/music"), &sample(), true, true, true, "flac");
         let expected = Path::new("/music")
             .join("Gigi D'Agostino")
             .join("L'Amour Toujours (1999)")
@@ -135,8 +136,19 @@ mod tests {
     }
 
     #[test]
+    fn smart_path_without_year_in_folder() {
+        let path = build_path(Path::new("/music"), &sample(), true, false, true, "flac");
+        let expected = Path::new("/music")
+            .join("Gigi D'Agostino")
+            .join("L'Amour Toujours")
+            .join("Disc 1")
+            .join("03 - The Things You Say.flac");
+        assert_eq!(path, expected);
+    }
+
+    #[test]
     fn flat_path_no_indexing() {
-        let path = build_path(Path::new("/music"), &sample(), false, false, "mp3");
+        let path = build_path(Path::new("/music"), &sample(), false, true, false, "mp3");
         assert_eq!(path, Path::new("/music").join("The Things You Say.mp3"));
     }
 
@@ -149,7 +161,7 @@ mod tests {
     fn single_disc_has_no_disc_folder() {
         let mut meta = sample();
         meta.total_discs = Some(1);
-        let path = build_path(Path::new("/music"), &meta, true, false, "m4a");
+        let path = build_path(Path::new("/music"), &meta, true, true, false, "m4a");
         assert!(!path.to_string_lossy().contains("Disc"));
     }
 }

@@ -9,6 +9,7 @@ publish = false
 [dependencies]
 # GUI
 egui = "0.35.0"
+egui_material_icons = "0.7"
 eframe = { version = "0.35.0", features = [
     "glow",
     "persistence",

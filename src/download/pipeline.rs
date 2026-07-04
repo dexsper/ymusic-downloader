@@ -186,9 +186,11 @@ pub async fn download_track(
         &download_dir,
         &meta,
         settings.smart_library_organization,
+        settings.album_year_in_folder,
         settings.track_indexing,
         codec.file_extension(),
     );
+
     if let Some(parent) = path.parent() {
         tokio::fs::create_dir_all(parent).await?;
     }

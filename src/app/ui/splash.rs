@@ -1,11 +1,12 @@
-//! Splash screen: displays the Yandex Music logo for ~2 seconds, then transitions.
+//! Splash screen: displays the Yandex Music logo for ~2 s, then routes based on auth status.
 
 use std::time::Duration;
 
-use crate::app::{YmdApp, theme};
+use crate::app::ui::auth::AuthStatus;
+use crate::app::{Screen, YmdApp, theme};
 
 const SPLASH_DURATION: Duration = Duration::from_millis(2000);
-const LOGO_MAX_WIDTH: f32 = 360.0;
+const LOGO_MAX_WIDTH: f32 = 280.0;
 
 pub fn show(ui: &mut egui::Ui, app: &mut YmdApp) {
     if app.logo_texture.is_none() {
@@ -21,9 +22,7 @@ pub fn show(ui: &mut egui::Ui, app: &mut YmdApp) {
                     egui::TextureOptions::LINEAR,
                 ));
             }
-            Err(err) => {
-                tracing::warn!(%err, "failed to decode splash logo");
-            }
+            Err(err) => tracing::warn!(%err, "failed to decode splash logo"),
         }
     }
 
@@ -44,17 +43,40 @@ pub fn show(ui: &mut egui::Ui, app: &mut YmdApp) {
     }
 
     let elapsed = app.splash_start.elapsed();
-    let dot_y = center.y + LOGO_MAX_WIDTH * 0.18 + 32.0;
-    draw_dots(ui, center.x, dot_y, elapsed);
 
     if elapsed >= SPLASH_DURATION {
-        app.screen = app.post_splash_screen;
+        let status = app
+            .auth_ui
+            .status
+            .lock()
+            .map(|g| g.clone())
+            .unwrap_or_default();
+
+        match status {
+            // Keep showing dots while the background token check is still running.
+            AuthStatus::CheckingToken => {
+                let dot_y = center.y + LOGO_MAX_WIDTH * 0.18 + 32.0;
+                draw_dots(ui, center.x, dot_y, elapsed);
+                ui.ctx().request_repaint_after(Duration::from_millis(16));
+            }
+            AuthStatus::SignedIn(_) => {
+                app.main_started = std::time::Instant::now();
+                app.screen = Screen::Main;
+                ui.ctx().request_repaint();
+            }
+            _ => {
+                app.auth_started = std::time::Instant::now();
+                app.screen = Screen::Auth;
+                ui.ctx().request_repaint();
+            }
+        }
     } else {
+        let dot_y = center.y + LOGO_MAX_WIDTH * 0.18 + 32.0;
+        draw_dots(ui, center.x, dot_y, elapsed);
         ui.ctx().request_repaint_after(Duration::from_millis(16));
     }
 }
 
-/// Draws three animated loading dots below the logo.
 fn draw_dots(ui: &mut egui::Ui, cx: f32, y: f32, elapsed: Duration) {
     let t = elapsed.as_secs_f32();
     let painter = ui.painter();

@@ -12,48 +12,37 @@ use crate::config::Settings;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Screen {
     Splash,
+    /// Shown when the user is not authenticated.
+    Auth,
     Main,
-}
-
-/// Main screen tab.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Tab {
-    Queue,
-    Settings,
 }
 
 /// Root application state, holding settings, the API client, and UI state.
 pub struct YmdApp {
     pub settings: Settings,
     pub screen: Screen,
-    pub tab: Tab,
-    /// Yandex Music API client shared between the UI thread and background tasks
-    /// (`Arc` makes cloning cheap).
+    pub show_settings: bool,
     pub api_client: Arc<ApiClient>,
-    /// Dedicated Tokio runtime for network operations; keeps the egui UI thread responsive.
     pub runtime: tokio::runtime::Runtime,
-    /// egui context cloned into background tasks to request repaints on completion.
     pub egui_ctx: egui::Context,
     pub auth_ui: ui::auth::AuthUiState,
-    /// Download queue shared with background Tokio tasks.
     pub queue: crate::download::queue::DownloadQueue,
-    /// Link input field text on the queue screen.
     pub link_input: String,
-    /// Whether the account popup is open.
     pub show_account_popup: bool,
-    /// Instant of application startup, used to time the splash screen.
+    pub smart_org_expanded: bool,
     pub splash_start: std::time::Instant,
-    /// Logo texture, loaded lazily on the first splash frame.
     pub logo_texture: Option<egui::TextureHandle>,
-    /// Screen to transition to after the splash finishes.
-    pub post_splash_screen: Screen,
+    /// Set to `Instant::now()` when transitioning to `Screen::Auth`; drives the logo animation.
+    pub auth_started: std::time::Instant,
+    /// Set to `Instant::now()` when transitioning to `Screen::Main`; drives the sidebar logo animation.
+    pub main_started: std::time::Instant,
 }
 
 impl YmdApp {
-    /// Creates the application, loading persisted settings and starting the Tokio runtime.
     #[must_use]
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         theme::apply(&cc.egui_ctx);
+        egui_material_icons::initialize(&cc.egui_ctx);
 
         let mut settings = Settings::load().unwrap_or_else(|err| {
             tracing::warn!(%err, "failed to load settings, using defaults");
@@ -74,10 +63,8 @@ impl YmdApp {
                 tracing::warn!(%err, "failed to save device_id/uuid");
             }
         }
+
         let api_client = Arc::new(api_client);
-
-        let post_splash_screen = Screen::Main;
-
         let auth_ui = ui::auth::AuthUiState::default();
         if settings.auth.token.is_some() {
             ui::auth::spawn_account_check(
@@ -92,8 +79,7 @@ impl YmdApp {
         Self {
             settings,
             screen: Screen::Splash,
-            post_splash_screen,
-            tab: Tab::Queue,
+            show_settings: false,
             api_client,
             runtime,
             egui_ctx: cc.egui_ctx.clone(),
@@ -101,8 +87,11 @@ impl YmdApp {
             queue: crate::download::queue::DownloadQueue::default(),
             link_input: String::new(),
             show_account_popup: false,
+            smart_org_expanded: false,
             splash_start: std::time::Instant::now(),
             logo_texture: None,
+            auth_started: std::time::Instant::now(),
+            main_started: std::time::Instant::now(),
         }
     }
 }
@@ -111,8 +100,40 @@ impl eframe::App for YmdApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         ui.painter()
             .rect_filled(ui.max_rect(), 0.0, theme::BG_CONTENT);
+
+        egui::Panel::top("title_bar")
+            .exact_size(ui::widgets::TITLE_H)
+            .show_separator_line(false)
+            .frame(
+                egui::Frame::new()
+                    .fill(theme::BG_CONTENT)
+                    .inner_margin(egui::Margin::ZERO),
+            )
+            .show(ui, |ui| {
+                let rect = ui.max_rect();
+                let drag_rect = egui::Rect::from_min_max(
+                    rect.min,
+                    egui::pos2(rect.max.x - ui::widgets::BTN_W * 3.0, rect.max.y),
+                );
+                let drag = ui.interact(
+                    drag_rect,
+                    egui::Id::new("win_drag"),
+                    egui::Sense::click_and_drag(),
+                );
+                if drag.drag_started() {
+                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
+                }
+                if drag.double_clicked() {
+                    let maximized = ui.input(|i| i.viewport().maximized.unwrap_or(false));
+                    ui.ctx()
+                        .send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized));
+                }
+            });
+
+        ui::widgets::show_win_controls(ui.ctx());
         match self.screen {
             Screen::Splash => ui::splash::show(ui, self),
+            Screen::Auth => ui::auth_screen::show(ui, self),
             Screen::Main => ui::main_screen::show(ui, self),
         }
     }

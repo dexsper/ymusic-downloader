@@ -1,4 +1,4 @@
-//! Authentication screen: Device Code Flow (browser confirmation) and manual token entry.
+//! Authentication backend: device-code flow, token persistence, and the profile island.
 
 use std::sync::{Arc, Mutex};
 
@@ -7,10 +7,8 @@ use crate::api::client::ApiClient;
 use crate::app::YmdApp;
 use crate::app::theme;
 
-const AVATAR_SIZE: f32 = 72.0;
 const RING_GAP: f32 = 2.0;
 const RING_WIDTH: f32 = 2.0;
-const AVATAR_OUTER_SIZE: f32 = AVATAR_SIZE + (RING_GAP + RING_WIDTH) * 2.0;
 
 /// Current state of the authorization process, shared between the UI thread and background tasks.
 #[derive(Debug, Default, Clone)]
@@ -24,10 +22,9 @@ pub enum AuthStatus {
     Error(String),
 }
 
-/// State for the authentication screen.
+/// Shared auth UI state, accessed from both the UI thread and background tasks.
 pub struct AuthUiState {
     pub status: Arc<Mutex<AuthStatus>>,
-    pub manual_token_input: String,
     /// Token received in a background task, waiting to be persisted by the UI thread.
     pub token_to_persist: Arc<Mutex<Option<String>>>,
     /// Raw avatar bytes downloaded in background, waiting to be decoded on the UI thread.
@@ -40,7 +37,6 @@ impl Default for AuthUiState {
     fn default() -> Self {
         Self {
             status: Arc::new(Mutex::new(AuthStatus::SignedOut)),
-            manual_token_input: String::new(),
             token_to_persist: Arc::new(Mutex::new(None)),
             avatar_bytes: Arc::new(Mutex::new(None)),
             avatar_texture: None,
@@ -107,7 +103,7 @@ pub fn spawn_account_check(
     });
 }
 
-fn spawn_device_flow(app: &YmdApp) {
+pub(crate) fn spawn_device_flow(app: &YmdApp) {
     let status = app.auth_ui.status.clone();
     let token_to_persist = app.auth_ui.token_to_persist.clone();
     let avatar_bytes = app.auth_ui.avatar_bytes.clone();
@@ -154,32 +150,6 @@ fn spawn_device_flow(app: &YmdApp) {
     });
 }
 
-fn spawn_manual_login(app: &YmdApp, token: String) {
-    let status = app.auth_ui.status.clone();
-    let token_to_persist = app.auth_ui.token_to_persist.clone();
-    let avatar_bytes = app.auth_ui.avatar_bytes.clone();
-    let api_client = app.api_client.clone();
-    let ctx = app.egui_ctx.clone();
-
-    api_client.set_token(Some(token.clone()));
-    if let Ok(mut guard) = token_to_persist.lock() {
-        *guard = Some(token);
-    }
-    set_status(&status, &ctx, AuthStatus::CheckingToken);
-
-    app.runtime.spawn(async move {
-        match auth::fetch_account_info(&api_client).await {
-            Ok(info) => {
-                if let Some(url) = info.get_avatar_url("islands-75") {
-                    spawn_avatar_fetch(url, avatar_bytes, ctx.clone());
-                }
-                set_status(&status, &ctx, AuthStatus::SignedIn(info));
-            }
-            Err(err) => set_status(&status, &ctx, AuthStatus::Error(err.to_string())),
-        }
-    });
-}
-
 pub(crate) fn sign_out(app: &mut YmdApp) {
     app.api_client.set_token(None);
     app.settings.auth.token = None;
@@ -193,117 +163,6 @@ pub(crate) fn sign_out(app: &mut YmdApp) {
         *guard = None;
     }
     app.auth_ui.avatar_texture = None;
-}
-
-pub fn show(ui: &mut egui::Ui, app: &mut YmdApp) {
-    let persisted_token = app
-        .auth_ui
-        .token_to_persist
-        .lock()
-        .ok()
-        .and_then(|mut guard| guard.take());
-    if let Some(token) = persisted_token {
-        app.settings.auth.token = Some(token);
-        if let Err(err) = app.settings.save() {
-            tracing::warn!(%err, "failed to save authorization token");
-        }
-    }
-
-    let status = app
-        .auth_ui
-        .status
-        .lock()
-        .map(|guard| guard.clone())
-        .unwrap_or_default();
-
-    ui.label(theme::heading("Аккаунт", 18.0));
-    ui.add_space(8.0);
-    ui.separator();
-    ui.add_space(8.0);
-
-    match status {
-        AuthStatus::SignedOut => show_signed_out(ui, app),
-        AuthStatus::RequestingCode => {
-            ui.horizontal(|ui| {
-                ui.spinner();
-                ui.label("Запрашиваем код…");
-            });
-        }
-        AuthStatus::AwaitingConfirmation(device) => show_awaiting_confirmation(ui, &device),
-        AuthStatus::CheckingToken => {
-            ui.horizontal(|ui| {
-                ui.spinner();
-                ui.label("Проверяем токен…");
-            });
-        }
-        AuthStatus::SignedIn(info) => show_signed_in(ui, app, &info),
-        AuthStatus::Error(message) => {
-            ui.colored_label(theme::ERROR, format!("Ошибка: {message}"));
-            ui.add_space(8.0);
-            show_signed_out(ui, app);
-        }
-    }
-}
-
-fn show_signed_out(ui: &mut egui::Ui, app: &mut YmdApp) {
-    ui.label("Войдите в аккаунт с активной подпиской.");
-    ui.add_space(10.0);
-
-    let login_btn = egui::Button::new(
-        egui::RichText::new("Войти через браузер")
-            .color(theme::ON_ACCENT)
-            .strong(),
-    )
-    .fill(theme::ACCENT);
-    if ui
-        .add_sized([ui.available_width(), 32.0], login_btn)
-        .clicked()
-    {
-        spawn_device_flow(app);
-    }
-
-    ui.add_space(12.0);
-    ui.separator();
-    ui.add_space(8.0);
-    ui.label("Или вставьте OAuth-токен:");
-    ui.add(
-        egui::TextEdit::singleline(&mut app.auth_ui.manual_token_input)
-            .password(true)
-            .desired_width(ui.available_width())
-            .hint_text("y0_AgAAA…"),
-    );
-    ui.add_space(4.0);
-    if ui
-        .add_sized(
-            [ui.available_width(), 28.0],
-            egui::Button::new("Войти по токену"),
-        )
-        .clicked()
-        && !app.auth_ui.manual_token_input.trim().is_empty()
-    {
-        let token = app.auth_ui.manual_token_input.trim().to_owned();
-        app.auth_ui.manual_token_input.clear();
-        spawn_manual_login(app, token);
-    }
-}
-
-fn show_awaiting_confirmation(ui: &mut egui::Ui, device: &DeviceCodeResponse) {
-    ui.label("Откройте эту страницу в браузере и введите код подтверждения:");
-    ui.add_space(8.0);
-    ui.hyperlink(&device.verification_url);
-    ui.add_space(8.0);
-    ui.horizontal(|ui| {
-        ui.label("Код:");
-        ui.monospace(&device.user_code);
-        if ui.small_button("Копировать").clicked() {
-            ui.ctx().copy_text(device.user_code.clone());
-        }
-    });
-    ui.add_space(12.0);
-    ui.horizontal(|ui| {
-        ui.spinner();
-        ui.label("Ожидаем подтверждения…");
-    });
 }
 
 const PLUS_GRADIENT: &[(f32, egui::Color32)] = &[
@@ -383,99 +242,13 @@ fn draw_plus_ring(painter: &egui::Painter, center: egui::Pos2, outer_r: f32, inn
     painter.add(egui::Shape::mesh(mesh));
 }
 
-fn show_signed_in(ui: &mut egui::Ui, app: &mut YmdApp, info: &AccountInfo) {
-    let name = info
-        .public_name
-        .clone()
-        .or_else(|| info.login.clone())
-        .unwrap_or_else(|| info.uid.to_string());
-
-    ui.vertical_centered(|ui| {
-        ui.add_space(8.0);
-
-        let has_plus = info.has_active_subscription();
-        let total = if has_plus {
-            AVATAR_OUTER_SIZE
-        } else {
-            AVATAR_SIZE
-        };
-        let (rect, _) = ui.allocate_exact_size(egui::vec2(total, total), egui::Sense::hover());
-        let img_rect =
-            egui::Rect::from_center_size(rect.center(), egui::vec2(AVATAR_SIZE, AVATAR_SIZE));
-
-        if has_plus {
-            let inner_r = AVATAR_SIZE / 2.0 + RING_GAP;
-            let outer_r = inner_r + RING_WIDTH;
-            draw_plus_ring(ui.painter(), rect.center(), outer_r, inner_r);
-        }
-
-        if let Some(tex) = &app.auth_ui.avatar_texture {
-            let sized = egui::load::SizedTexture::new(tex.id(), img_rect.size());
-            egui::Image::new(sized)
-                .corner_radius(AVATAR_SIZE / 2.0)
-                .paint_at(ui, img_rect);
-        } else {
-            ui.painter().circle_filled(
-                rect.center(),
-                AVATAR_SIZE / 2.0,
-                theme::ACCENT.gamma_multiply(0.25),
-            );
-            let initial = name
-                .chars()
-                .next()
-                .unwrap_or('?')
-                .to_uppercase()
-                .to_string();
-            ui.painter().text(
-                rect.center(),
-                egui::Align2::CENTER_CENTER,
-                initial,
-                egui::FontId::proportional(28.0),
-                theme::ACCENT,
-            );
-        }
-
-        ui.add_space(10.0);
-
-        ui.label(
-            egui::RichText::new(&name)
-                .strong()
-                .size(15.0)
-                .color(theme::TEXT_PRIMARY),
-        );
-        if let Some(login) = &info.login {
-            if login != &name {
-                ui.label(
-                    egui::RichText::new(login)
-                        .color(theme::TEXT_MUTED)
-                        .size(12.0),
-                );
-            }
-        }
-
-        ui.add_space(10.0);
-
-        if info.has_active_subscription() {
-            ui.colored_label(theme::SUCCESS, "Яндекс.Плюс активен");
-        } else {
-            ui.colored_label(theme::WARNING, "Подписка не обнаружена");
-        }
-
-        ui.add_space(16.0);
-        if ui
-            .add_sized([ui.available_width(), 28.0], egui::Button::new("Выйти"))
-            .clicked()
-        {
-            sign_out(app);
-        }
-    });
-}
-
 const ISLAND_AVATAR: f32 = 36.0;
-const ISLAND_MARGIN: f32 = 12.0;
+/// Horizontal gap between the sidebar edge and the island frame.
+const ISLAND_MARGIN: f32 = 8.0;
 const ISLAND_MARGIN_BOTTOM: f32 = 16.0;
 const ISLAND_PADDING: f32 = 10.0;
-const ISLAND_W: f32 = 210.0;
+/// Island frame outer width — must satisfy: ISLAND_MARGIN + ISLAND_W ≤ SIDEBAR_W.
+const ISLAND_W: f32 = crate::app::ui::widgets::SIDEBAR_W - ISLAND_MARGIN * 2.0;
 const POPUP_PADDING: f32 = 12.0;
 
 pub fn show_island(ctx: &egui::Context, app: &mut YmdApp) {
@@ -507,84 +280,20 @@ pub fn show_island(ctx: &egui::Context, app: &mut YmdApp) {
         .lock()
         .map(|g| g.clone())
         .unwrap_or_default();
-    let screen = ctx.input(|i| i.viewport_rect());
 
-    if app.show_account_popup {
-        let popup_pos = egui::pos2(
-            ISLAND_MARGIN,
-            screen.max.y
-                - ISLAND_AVATAR
-                - ISLAND_PADDING * 2.0
-                - ISLAND_MARGIN_BOTTOM
-                - 8.0
-                - 130.0,
-        );
-        egui::Area::new(egui::Id::new("account_popup"))
-            .fixed_pos(popup_pos)
-            .order(egui::Order::Foreground)
-            .show(ctx, |ui| {
-                egui::Frame::new()
-                    .fill(theme::BG_POPOVER)
-                    .corner_radius(12.0)
-                    .stroke(egui::Stroke::new(1.0, theme::OUTLINE))
-                    .inner_margin(egui::Margin::same(POPUP_PADDING as i8))
-                    .show(ui, |ui| {
-                        ui.set_min_width(ISLAND_W - POPUP_PADDING * 2.0);
-                        if let AuthStatus::SignedIn(ref info) = status {
-                            let name = info
-                                .public_name
-                                .clone()
-                                .or_else(|| info.login.clone())
-                                .unwrap_or_else(|| info.uid.to_string());
-                            ui.label(
-                                egui::RichText::new(&name)
-                                    .strong()
-                                    .color(theme::TEXT_PRIMARY),
-                            );
-                            if let Some(login) = &info.login {
-                                if *login != name {
-                                    ui.label(
-                                        egui::RichText::new(login)
-                                            .color(theme::TEXT_MUTED)
-                                            .size(12.0),
-                                    );
-                                }
-                            }
-                            ui.add_space(8.0);
-                        }
-                        let sign_out_btn = egui::Button::new(
-                            egui::RichText::new("Выйти").color(theme::TEXT_PRIMARY),
-                        )
-                        .fill(theme::SECONDARY_BG);
-                        if ui
-                            .add_sized([ui.available_width(), 30.0], sign_out_btn)
-                            .clicked()
-                        {
-                            sign_out(app);
-                            app.show_account_popup = false;
-                        }
-                    });
-            });
-
-        if ctx.input(|i| i.pointer.any_click()) {
-            let click_pos = ctx.input(|i| i.pointer.interact_pos()).unwrap_or_default();
-            let popup_rect =
-                egui::Rect::from_min_size(popup_pos, egui::vec2(ISLAND_W, 130.0 + 24.0));
-            let island_rect = egui::Rect::from_min_size(
-                egui::pos2(
-                    ISLAND_MARGIN,
-                    screen.max.y - ISLAND_AVATAR - ISLAND_PADDING * 2.0 - ISLAND_MARGIN_BOTTOM,
-                ),
-                egui::vec2(ISLAND_W, ISLAND_AVATAR + ISLAND_PADDING * 2.0),
-            );
-            if !popup_rect.contains(click_pos) && !island_rect.contains(click_pos) {
-                app.show_account_popup = false;
-            }
-        }
+    let should_show = matches!(status, AuthStatus::SignedIn(_) | AuthStatus::CheckingToken);
+    if !should_show {
+        return;
     }
 
+    let screen = ctx.input(|i| i.viewport_rect());
+    let island_id = egui::Id::new("account_island");
+    let popup_id = egui::Id::new("account_popup");
+
     let island_y = screen.max.y - ISLAND_AVATAR - ISLAND_PADDING * 2.0 - ISLAND_MARGIN_BOTTOM;
-    egui::Area::new(egui::Id::new("account_island"))
+
+    // Island must be rendered before the popup so the popup draws on top.
+    let island_response = egui::Area::new(island_id)
         .fixed_pos(egui::pos2(ISLAND_MARGIN, island_y))
         .order(egui::Order::Foreground)
         .show(ctx, |ui| {
@@ -624,13 +333,7 @@ pub fn show_island(ctx: &egui::Context, app: &mut YmdApp) {
                                 AuthStatus::CheckingToken => {
                                     ui.spinner();
                                 }
-                                _ => {
-                                    ui.label(
-                                        egui::RichText::new("Войти")
-                                            .size(13.0)
-                                            .color(theme::TEXT_MUTED),
-                                    );
-                                }
+                                _ => {}
                             }
                         });
                     });
@@ -648,6 +351,93 @@ pub fn show_island(ctx: &egui::Context, app: &mut YmdApp) {
                 ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
             }
         });
+
+    if app.show_account_popup {
+        // area_rect returns the rect from the previous frame; this is the standard egui
+        // pattern for positioning a popup relative to its anchor without a one-frame lag.
+        let prev_island_rect = ctx.memory(|m| m.area_rect(island_id));
+        let prev_popup_h = ctx
+            .memory(|m| m.area_rect(popup_id))
+            .map(|r| r.height())
+            .unwrap_or(160.0);
+
+        let popup_bottom_y = prev_island_rect.map(|r| r.min.y).unwrap_or(island_y);
+        let popup_pos = egui::pos2(ISLAND_MARGIN, popup_bottom_y - 8.0 - prev_popup_h);
+
+        egui::Area::new(popup_id)
+            .fixed_pos(popup_pos)
+            .order(egui::Order::Foreground)
+            .show(ctx, |ui| {
+                egui::Frame::new()
+                    .fill(theme::BG_POPOVER)
+                    .corner_radius(12.0)
+                    .stroke(egui::Stroke::new(1.0, theme::OUTLINE))
+                    .inner_margin(egui::Margin::same(POPUP_PADDING as i8))
+                    .show(ui, |ui| {
+                        ui.set_min_width(ISLAND_W - POPUP_PADDING * 2.0);
+                        if let AuthStatus::SignedIn(ref info) = status {
+                            let name = info
+                                .public_name
+                                .clone()
+                                .or_else(|| info.login.clone())
+                                .unwrap_or_else(|| info.uid.to_string());
+                            ui.label(
+                                egui::RichText::new(&name)
+                                    .strong()
+                                    .color(theme::TEXT_PRIMARY),
+                            );
+                            if let Some(login) = &info.login {
+                                if *login != name {
+                                    ui.label(
+                                        egui::RichText::new(login)
+                                            .color(theme::TEXT_MUTED)
+                                            .size(12.0),
+                                    );
+                                }
+                            }
+                            ui.add_space(8.0);
+                        }
+                        let settings_btn = egui::Button::new(
+                            egui::RichText::new("Настройки").color(theme::TEXT_PRIMARY),
+                        )
+                        .fill(theme::SECONDARY_BG);
+                        if ui
+                            .add_sized([ui.available_width(), 30.0], settings_btn)
+                            .clicked()
+                        {
+                            app.show_settings = true;
+                            app.show_account_popup = false;
+                        }
+
+                        ui.add_space(4.0);
+
+                        let sign_out_btn = egui::Button::new(
+                            egui::RichText::new("Выйти").color(theme::TEXT_PRIMARY),
+                        )
+                        .fill(theme::SECONDARY_BG);
+                        if ui
+                            .add_sized([ui.available_width(), 30.0], sign_out_btn)
+                            .clicked()
+                        {
+                            sign_out(app);
+                            app.show_account_popup = false;
+                            app.screen = crate::app::Screen::Auth;
+                            app.auth_started = std::time::Instant::now();
+                        }
+                    });
+            });
+
+        if ctx.input(|i| i.pointer.any_click()) {
+            let click_pos = ctx.input(|i| i.pointer.interact_pos()).unwrap_or_default();
+            let popup_rect = ctx
+                .memory(|m| m.area_rect(popup_id))
+                .unwrap_or(egui::Rect::NOTHING);
+            let island_rect = island_response.response.rect;
+            if !popup_rect.contains(click_pos) && !island_rect.contains(click_pos) {
+                app.show_account_popup = false;
+            }
+        }
+    }
 }
 
 fn draw_small_avatar(ui: &mut egui::Ui, app: &YmdApp, status: &AuthStatus) {

@@ -70,8 +70,10 @@ pub struct Settings {
     pub quality: Quality,
     /// Resolution of cover art embedded into tags.
     pub cover_size: CoverSize,
-    /// Organize downloads as `{Artist}/{Album (Year)}/Disc N/{index} - {Title}.ext`.
+    /// Organize downloads as `{Artist}/{Album}/Disc N/{index} - {Title}.ext`.
     pub smart_library_organization: bool,
+    /// Append the release year to the album folder name: `Album (Year)`.
+    pub album_year_in_folder: bool,
     /// Prepend track index prefixes (`01 - `, `02 - `) to file names.
     pub track_indexing: bool,
     /// Folder where downloaded files are saved.
@@ -89,6 +91,7 @@ impl Default for Settings {
             quality: Quality::default(),
             cover_size: CoverSize::default(),
             smart_library_organization: true,
+            album_year_in_folder: true,
             track_indexing: true,
             download_dir: dirs::audio_dir().or_else(dirs::download_dir),
             max_parallel_downloads: 3,

@@ -1,81 +1,33 @@
-//! Main screen: custom title bar, tab navigation, content area, and floating account island.
+//! Main screen: sidebar (logo + profile island) and content area.
+
+use egui_material_icons::icons::ICON_CLOSE;
 
 use crate::app::theme;
-use crate::app::{Tab, YmdApp};
+use crate::app::ui::widgets::{self, SIDEBAR_W, TITLE_H};
+use crate::app::YmdApp;
 
-const TITLE_H: f32 = 40.0;
-const BTN_W: f32 = 46.0;
+/// Logo width on the splash screen (start of animation). Must match `splash::LOGO_MAX_WIDTH`.
+const SPLASH_LOGO_W: f32 = 280.0;
+/// Logo width once settled in the sidebar.
+const SIDEBAR_LOGO_W: f32 = SIDEBAR_W - 40.0;
+/// Padding between the bottom of the title bar and the top of the logo.
+const LOGO_TOP_PAD: f32 = 30.0;
+/// Animation duration for the logo fly-in to the sidebar.
+const ANIM_SECS: f32 = 0.9;
 
 pub fn show(ui: &mut egui::Ui, app: &mut YmdApp) {
-    egui::Panel::top("title_bar")
-        .exact_size(TITLE_H)
+    egui::Panel::left("sidebar")
+        .exact_size(SIDEBAR_W)
+        .resizable(false)
+        .show_separator_line(false)
         .frame(
             egui::Frame::new()
-                .fill(theme::BG_BASIC)
+                .fill(theme::BG_CONTENT)
                 .inner_margin(egui::Margin::ZERO),
         )
-        .show(ui, |ui| {
-            let rect = ui.max_rect();
-
-            let drag_rect = egui::Rect::from_min_max(
-                rect.min,
-                egui::pos2(rect.max.x - BTN_W * 3.0, rect.max.y),
-            );
-            let drag = ui.interact(
-                drag_rect,
-                egui::Id::new("win_drag"),
-                egui::Sense::click_and_drag(),
-            );
-            if drag.drag_started() {
-                ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
-            }
-            if drag.double_clicked() {
-                let maximized = ui.input(|i| i.viewport().maximized.unwrap_or(false));
-                ui.ctx()
-                    .send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized));
-            }
-
-            ui.horizontal(|ui| {
-                ui.set_height(TITLE_H);
-                ui.add_space(12.0);
-                ui.label(theme::heading("Я.Музыка Downloader", 17.0));
-                ui.add_space(16.0);
-                tab_button(ui, app, Tab::Queue, "Загрузки");
-                tab_button(ui, app, Tab::Settings, "Настройки");
-
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    win_btn(
-                        ui,
-                        WinIcon::Close,
-                        egui::Color32::from_rgb(0xc4, 0x2b, 0x1c),
-                        |ctx| {
-                            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-                        },
-                    );
-                    let maximized = ui.input(|i| i.viewport().maximized.unwrap_or(false));
-                    let restore_icon = if maximized {
-                        WinIcon::Restore
-                    } else {
-                        WinIcon::Maximize
-                    };
-                    win_btn(
-                        ui,
-                        restore_icon,
-                        egui::Color32::from_rgba_unmultiplied(0xff, 0xff, 0xff, 0x22),
-                        |ctx| {
-                            ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized));
-                        },
-                    );
-                    win_btn(
-                        ui,
-                        WinIcon::Minimize,
-                        egui::Color32::from_rgba_unmultiplied(0xff, 0xff, 0xff, 0x22),
-                        |ctx| {
-                            ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
-                        },
-                    );
-                });
-            });
+        .show(ui, |_ui| {
+            // Content is drawn as foreground layers (logo, island) to allow
+            // the logo to animate across panel boundaries from the splash position.
         });
 
     egui::CentralPanel::default()
@@ -84,115 +36,131 @@ pub fn show(ui: &mut egui::Ui, app: &mut YmdApp) {
                 .fill(theme::BG_CONTENT)
                 .inner_margin(egui::Margin::same(16)),
         )
-        .show(ui, |ui| match app.tab {
-            Tab::Queue => super::queue::show(ui, app),
-            Tab::Settings => super::settings::show(ui, app),
+        .show(ui, |ui| {
+            super::queue::show(ui, app);
         });
 
+    // Logo: animates from splash centre to the top of the sidebar.
+    if let Some(tex) = app.logo_texture.as_ref().map(|t| t.id()) {
+        let tex_size = app.logo_texture.as_ref().unwrap().size_vec2();
+
+        let t = (app.main_started.elapsed().as_secs_f32() / ANIM_SECS).min(1.0);
+        let te = widgets::ease_out_quart(t);
+
+        let screen = ui.ctx().input(|i| i.viewport_rect());
+
+        let logo_w = widgets::lerp(SPLASH_LOGO_W, SIDEBAR_LOGO_W, te);
+        let scale = logo_w / tex_size.x;
+        let display = tex_size * scale;
+
+        let target_cx = SIDEBAR_W / 2.0;
+        let target_cy = TITLE_H + LOGO_TOP_PAD + display.y * 0.5;
+
+        let logo_cx = widgets::lerp(screen.center().x, target_cx, te);
+        let logo_cy = widgets::lerp(screen.center().y, target_cy, te);
+
+        ui.ctx()
+            .layer_painter(egui::LayerId::new(
+                egui::Order::Foreground,
+                egui::Id::new("sidebar_logo"),
+            ))
+            .image(
+                tex,
+                egui::Rect::from_center_size(egui::pos2(logo_cx, logo_cy), display),
+                egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                egui::Color32::WHITE,
+            );
+
+        if t < 1.0 {
+            ui.ctx().request_repaint();
+        }
+    }
+
+    // Settings overlay
+    if app.show_settings {
+        let screen = ui.ctx().input(|i| i.viewport_rect());
+        let win_w = (screen.width() - 80.0).min(520.0);
+        let win_h = screen.height() - TITLE_H - 40.0;
+        let win_pos = egui::pos2(screen.center().x - win_w * 0.5, TITLE_H + 20.0);
+
+        ui.painter()
+            .rect_filled(screen, 0.0, egui::Color32::from_black_alpha(140));
+
+        egui::Area::new(egui::Id::new("settings_overlay"))
+            .fixed_pos(win_pos)
+            .order(egui::Order::Foreground)
+            .show(ui.ctx(), |ui| {
+                egui::Frame::new()
+                    .fill(theme::BG_CONTENT)
+                    .corner_radius(12.0)
+                    .stroke(egui::Stroke::new(1.0, theme::OUTLINE))
+                    .show(ui, |ui| {
+                        ui.set_width(win_w);
+                        ui.set_height(win_h);
+
+                        egui::Frame::new()
+                            .inner_margin(egui::Margin {
+                                left: 16,
+                                right: 16,
+                                top: 10,
+                                bottom: 4,
+                            })
+                            .show(ui, |ui| {
+                                ui.horizontal(|ui| {
+                                    ui.label(theme::heading("Настройки", 20.0));
+                                    ui.with_layout(
+                                        egui::Layout::right_to_left(egui::Align::Center),
+                                        |ui| {
+                                            let close_resp = ui.add(
+                                                egui::Button::new(
+                                                    egui::RichText::new(ICON_CLOSE.codepoint)
+                                                        .font(egui::FontId::new(
+                                                            18.0,
+                                                            ICON_CLOSE.font_family(),
+                                                        ))
+                                                        .color(theme::TEXT_MUTED),
+                                                )
+                                                .fill(egui::Color32::TRANSPARENT)
+                                                .frame(false),
+                                            );
+                                            if close_resp.clicked() {
+                                                app.show_settings = false;
+                                            }
+                                            if close_resp.hovered() {
+                                                ui.ctx().set_cursor_icon(
+                                                    egui::CursorIcon::PointingHand,
+                                                );
+                                            }
+                                        },
+                                    );
+                                });
+                            });
+
+                        ui.separator();
+
+                        egui::ScrollArea::vertical().show(ui, |ui| {
+                            egui::Frame::new()
+                                .inner_margin(egui::Margin::symmetric(16, 0))
+                                .show(ui, |ui| {
+                                    super::settings::show(ui, app);
+                                });
+                        });
+                    });
+            });
+
+        // area_rect uses the previous-frame rect; skip on the very first frame.
+        if ui.ctx().input(|i| i.pointer.any_click()) {
+            if let Some(click_pos) = ui.ctx().input(|i| i.pointer.interact_pos()) {
+                let overlay_rect = ui
+                    .ctx()
+                    .memory(|m| m.area_rect(egui::Id::new("settings_overlay")))
+                    .unwrap_or(egui::Rect::NOTHING);
+                if !overlay_rect.contains(click_pos) {
+                    app.show_settings = false;
+                }
+            }
+        }
+    }
+
     super::auth::show_island(ui.ctx(), app);
-}
-
-fn tab_button(ui: &mut egui::Ui, app: &mut YmdApp, tab: Tab, label: &str) {
-    let selected = app.tab == tab;
-    let color = if selected {
-        theme::ACCENT
-    } else {
-        theme::TEXT_MUTED
-    };
-    let text = egui::RichText::new(label).color(color).size(15.0);
-    let text = if selected { text.strong() } else { text };
-    if ui
-        .add(
-            egui::Button::new(text)
-                .fill(egui::Color32::TRANSPARENT)
-                .frame(false),
-        )
-        .clicked()
-    {
-        app.tab = tab;
-    }
-}
-
-/// Window control button icons.
-///
-/// Symbols such as `✕`, `□`, `─` are rendered by the font, but the application's custom fonts
-/// (YS Text / YSMusic Headline) lack glyphs for them — Skia/egui substitutes a blank placeholder.
-/// Icons are therefore drawn manually using lines and rectangles.
-#[derive(Clone, Copy)]
-enum WinIcon {
-    Close,
-    Minimize,
-    Maximize,
-    Restore,
-}
-
-/// Window control button: transparent background, `hover_fill` on hover.
-fn win_btn(
-    ui: &mut egui::Ui,
-    icon: WinIcon,
-    hover_fill: egui::Color32,
-    on_click: impl FnOnce(&egui::Context),
-) {
-    let size = egui::vec2(BTN_W, TITLE_H);
-    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
-    if response.hovered() {
-        ui.painter().rect_filled(rect, 0.0, hover_fill);
-    }
-    let color = if response.hovered() {
-        egui::Color32::WHITE
-    } else {
-        theme::TEXT_MUTED
-    };
-    draw_win_icon(ui.painter(), rect.center(), icon, color);
-    if response.clicked() {
-        on_click(ui.ctx());
-    }
-}
-
-/// Draws a Windows 11-style window control icon (thin lines, ~10 px).
-fn draw_win_icon(painter: &egui::Painter, center: egui::Pos2, icon: WinIcon, color: egui::Color32) {
-    let stroke = egui::Stroke::new(1.0, color);
-    let s = 4.5;
-
-    match icon {
-        WinIcon::Close => {
-            painter.line_segment(
-                [center + egui::vec2(-s, -s), center + egui::vec2(s, s)],
-                stroke,
-            );
-            painter.line_segment(
-                [center + egui::vec2(-s, s), center + egui::vec2(s, -s)],
-                stroke,
-            );
-        }
-        WinIcon::Minimize => {
-            painter.line_segment(
-                [center + egui::vec2(-s, 0.0), center + egui::vec2(s, 0.0)],
-                stroke,
-            );
-        }
-        WinIcon::Maximize => {
-            let square = egui::Rect::from_center_size(center, egui::vec2(s * 1.8, s * 1.8));
-            painter.rect_stroke(square, 0.0, stroke, egui::StrokeKind::Inside);
-        }
-        WinIcon::Restore => {
-            let side = s * 1.5;
-            let offset = s * 0.7;
-            let back = egui::Rect::from_min_size(
-                center + egui::vec2(-s + offset, -s),
-                egui::vec2(side, side),
-            );
-            let front = egui::Rect::from_min_size(
-                center + egui::vec2(-s, -s + offset),
-                egui::vec2(side, side),
-            );
-            painter.line_segment([back.left_top(), back.right_top()], stroke);
-            painter.line_segment([back.right_top(), back.right_bottom()], stroke);
-            painter.line_segment(
-                [back.left_top(), egui::pos2(back.left(), front.top())],
-                stroke,
-            );
-            painter.rect_stroke(front, 0.0, stroke, egui::StrokeKind::Inside);
-        }
-    }
 }

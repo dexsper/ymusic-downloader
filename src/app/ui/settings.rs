@@ -1,5 +1,7 @@
 //! Settings screen: download quality, cover resolution, library organization, and download folder.
 
+use egui_material_icons::icons::{ICON_EXPAND_LESS, ICON_EXPAND_MORE};
+
 use crate::app::YmdApp;
 use crate::app::theme;
 use crate::config::CoverSize;
@@ -16,8 +18,6 @@ const COVER_SIZES: [CoverSize; 5] = [
 pub fn show(ui: &mut egui::Ui, app: &mut YmdApp) {
     let mut changed = false;
 
-    ui.add_space(8.0);
-    ui.label(theme::heading("Настройки", 26.0));
     ui.add_space(8.0);
 
     egui::Grid::new("settings_grid")
@@ -62,29 +62,73 @@ pub fn show(ui: &mut egui::Ui, app: &mut YmdApp) {
                 });
             ui.end_row();
 
-            ui.label("Умная организация медиатеки:");
-            if ui
-                .checkbox(
-                    &mut app.settings.smart_library_organization,
-                    "Артист / Альбом (Год) / Диск N / Трек",
-                )
-                .changed()
-            {
-                changed = true;
-            }
+            ui.label("Умная организация:");
+            ui.horizontal(|ui| {
+                if ui
+                    .checkbox(&mut app.settings.smart_library_organization, "Включить")
+                    .changed()
+                {
+                    changed = true;
+                    if !app.settings.smart_library_organization {
+                        app.smart_org_expanded = false;
+                    }
+                }
+
+                if app.settings.smart_library_organization {
+                    let icon = if app.smart_org_expanded {
+                        ICON_EXPAND_LESS
+                    } else {
+                        ICON_EXPAND_MORE
+                    };
+
+                    let tooltip = if app.smart_org_expanded {
+                        "Скрыть"
+                    } else {
+                        "Настройки…"
+                    };
+                    if egui_material_icons::icon_button(ui, icon)
+                        .on_hover_text(tooltip)
+                        .clicked()
+                    {
+                        app.smart_org_expanded = !app.smart_org_expanded;
+                    }
+                }
+            });
             ui.end_row();
 
-            ui.label("Индексация треков:");
-            if ui
-                .checkbox(
-                    &mut app.settings.track_indexing,
-                    "Добавлять префиксы 01 -, 02 - к именам файлов",
-                )
-                .changed()
-            {
-                changed = true;
+            if app.smart_org_expanded && app.settings.smart_library_organization {
+                ui.label("");
+                egui::Frame::new()
+                    .fill(theme::SECONDARY_BG_HOVER)
+                    .corner_radius(egui::CornerRadius::same(8))
+                    .inner_margin(egui::Margin::symmetric(12, 8))
+                    .show(ui, |ui| {
+                        ui.vertical(|ui| {
+                            ui.add_space(2.0);
+                            if ui
+                                .checkbox(
+                                    &mut app.settings.track_indexing,
+                                    "Индексация треков (01 -, 02 - …)",
+                                )
+                                .changed()
+                            {
+                                changed = true;
+                            }
+                            ui.add_space(4.0);
+                            if ui
+                                .checkbox(
+                                    &mut app.settings.album_year_in_folder,
+                                    "Год в названии папки альбома",
+                                )
+                                .changed()
+                            {
+                                changed = true;
+                            }
+                            ui.add_space(2.0);
+                        });
+                    });
+                ui.end_row();
             }
-            ui.end_row();
 
             ui.label("Параллельные загрузки:");
             let slider_changed = ui

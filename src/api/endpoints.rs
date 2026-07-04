@@ -6,9 +6,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use crate::download::quality::Quality;
 
 use super::client::{ApiClient, ClientError};
-use super::models::{
-    Album, DownloadInfo, GetFileInfoBatchResponse, GetFileInfoResponse, Playlist, Track,
-};
+use super::models::{Album, DownloadInfo, GetFileInfoResponse, Playlist, Track};
 use super::sign::sign_get_file_info;
 
 /// Transport used by the desktop client: AES-128-CTR encrypted stream.
