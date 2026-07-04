@@ -49,6 +49,36 @@ pub fn format_index(track_number: u32, total_tracks: Option<u32>) -> String {
     format!("{track_number:0width$}")
 }
 
+/// Returns the artist directory under `root` using the same name as [`build_path`].
+///
+/// Used by the pipeline to place `artist.jpg` without duplicating the sanitization logic.
+#[must_use]
+pub fn build_artist_dir(root: &Path, meta: &TrackMetadata) -> PathBuf {
+    let artist = meta
+        .album_artist
+        .clone()
+        .unwrap_or_else(|| meta.joined_artists());
+    root.join(sanitize(&artist))
+}
+
+/// Returns the album directory under `root` using the same name as [`build_path`].
+///
+/// Used by the pipeline to place `cover.jpg` without duplicating the sanitization logic.
+#[must_use]
+pub fn build_album_dir(root: &Path, meta: &TrackMetadata, album_year_in_folder: bool) -> PathBuf {
+    let artist_dir = build_artist_dir(root, meta);
+    let album_name = meta.album.as_deref().unwrap_or("Unknown Album");
+    let album_dir_name = if album_year_in_folder {
+        match meta.year {
+            Some(year) => format!("{album_name} ({year})"),
+            None => album_name.to_owned(),
+        }
+    } else {
+        album_name.to_owned()
+    };
+    artist_dir.join(sanitize(&album_dir_name))
+}
+
 /// Builds the full output path for a track according to the current organization settings.
 ///
 /// * `root` — download root directory from settings;

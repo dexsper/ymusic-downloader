@@ -114,12 +114,37 @@ pub fn show(ui: &mut egui::Ui, app: &mut YmdApp) {
                             {
                                 changed = true;
                             }
+
                             ui.add_space(4.0);
                             if ui
                                 .checkbox(
                                     &mut app.settings.album_year_in_folder,
                                     "Год в названии папки альбома",
                                 )
+                                .changed()
+                            {
+                                changed = true;
+                            }
+
+                            ui.add_space(4.0);
+                            if ui
+                                .checkbox(
+                                    &mut app.settings.download_album_cover,
+                                    "Обложка альбома (cover.jpg)",
+                                )
+                                .on_hover_text("Сохраняет cover.jpg в папку альбома.")
+                                .changed()
+                            {
+                                changed = true;
+                            }
+
+                            ui.add_space(4.0);
+                            if ui
+                                .checkbox(
+                                    &mut app.settings.download_artist_image,
+                                    "Фото исполнителя (artist.jpg)",
+                                )
+                                .on_hover_text("Сохраняет artist.jpg в папку исполнителя.")
                                 .changed()
                             {
                                 changed = true;

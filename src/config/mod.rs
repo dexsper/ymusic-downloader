@@ -76,6 +76,10 @@ pub struct Settings {
     pub album_year_in_folder: bool,
     /// Prepend track index prefixes (`01 - `, `02 - `) to file names.
     pub track_indexing: bool,
+    /// Save `cover.jpg` inside each album folder (skipped if the file already exists).
+    pub download_album_cover: bool,
+    /// Save `artist.jpg` inside each artist folder (skipped if the file already exists).
+    pub download_artist_image: bool,
     /// Folder where downloaded files are saved.
     pub download_dir: Option<PathBuf>,
     /// Maximum number of concurrent downloads.
@@ -93,6 +97,8 @@ impl Default for Settings {
             smart_library_organization: true,
             album_year_in_folder: true,
             track_indexing: true,
+            download_album_cover: true,
+            download_artist_image: true,
             download_dir: dirs::audio_dir().or_else(dirs::download_dir),
             max_parallel_downloads: 3,
             auth: AuthState::default(),

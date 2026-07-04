@@ -202,11 +202,69 @@ pub async fn download_track(
         .await
         .expect("tagging task must not panic")?;
 
+    if settings.smart_library_organization {
+        let album_dir =
+            naming::build_album_dir(&download_dir, &meta, settings.album_year_in_folder);
+        let artist_dir = naming::build_artist_dir(&download_dir, &meta);
+
+        if settings.download_album_cover {
+            if let Some(cover_uri) = job.track.cover_uri() {
+                save_folder_image_if_absent(
+                    &http,
+                    cover_uri,
+                    settings.cover_size,
+                    &album_dir.join("cover.jpg"),
+                )
+                .await;
+            }
+        }
+
+        if settings.download_artist_image {
+            if let Some(artist) = job.track.artists.first() {
+                if let Some(cover_uri) = artist.cover_uri() {
+                    save_folder_image_if_absent(
+                        &http,
+                        cover_uri,
+                        settings.cover_size,
+                        &artist_dir.join("artist.jpg"),
+                    )
+                    .await;
+                }
+            }
+        }
+    }
+
     Ok(DownloadOutcome {
         path,
         codec,
         bitrate: info.bitrate,
     })
+}
+
+/// Downloads a folder image (artist photo or album cover) only when the destination file does
+/// not yet exist — prevents redundant CDN requests when multiple tracks share the same folder.
+async fn save_folder_image_if_absent(
+    http: &reqwest::Client,
+    cover_uri: &str,
+    size: CoverSize,
+    dest: &std::path::Path,
+) {
+    match tokio::fs::try_exists(dest).await {
+        Ok(true) => return,
+        Ok(false) => {}
+        Err(err) => {
+            tracing::warn!(%err, path = %dest.display(), "could not stat folder image path");
+            return;
+        }
+    }
+    match fetch_cover(http, cover_uri, size).await {
+        Ok(bytes) => {
+            if let Err(err) = tokio::fs::write(dest, &bytes).await {
+                tracing::warn!(%err, path = %dest.display(), "failed to write folder image");
+            }
+        }
+        Err(err) => tracing::warn!(%err, "failed to download folder image"),
+    }
 }
 
 async fn fetch_cover(

@@ -65,12 +65,44 @@ impl<'de> Deserialize<'de> for LabelName {
     }
 }
 
+/// Artist cover photo embedded in track/album responses.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ArtistCover {
+    /// CDN URI with a `%%` size placeholder, e.g. `avatars.yandex.net/get-music-misc/…/%%`.
+    #[serde(default)]
+    pub uri: Option<String>,
+}
+
 /// A musical artist.
 #[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Artist {
     #[serde(deserialize_with = "id_as_string")]
     pub id: String,
     pub name: String,
+    /// Primary artist photo (present in full track/album responses).
+    #[serde(default)]
+    pub cover: Option<ArtistCover>,
+    /// Open Graph image URI — fallback when `cover` is absent.
+    #[serde(default)]
+    pub og_image: Option<String>,
+    /// Operational image URI — secondary fallback.
+    #[serde(default)]
+    pub op_image: Option<String>,
+}
+
+impl Artist {
+    /// CDN URI with a `%%` size placeholder for the artist's photo.
+    ///
+    /// Priority: `cover.uri` → `og_image` → `op_image`.
+    #[must_use]
+    pub fn cover_uri(&self) -> Option<&str> {
+        self.cover
+            .as_ref()
+            .and_then(|c| c.uri.as_deref())
+            .or(self.og_image.as_deref())
+            .or(self.op_image.as_deref())
+    }
 }
 
 /// Position of a track within an album (disc number + track index).
