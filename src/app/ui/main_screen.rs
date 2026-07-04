@@ -61,7 +61,7 @@ pub fn show(ui: &mut egui::Ui, app: &mut YmdApp) {
 
         ui.ctx()
             .layer_painter(egui::LayerId::new(
-                egui::Order::Foreground,
+                egui::Order::Middle,
                 egui::Id::new("sidebar_logo"),
             ))
             .image(
@@ -88,7 +88,7 @@ pub fn show(ui: &mut egui::Ui, app: &mut YmdApp) {
 
         egui::Area::new(egui::Id::new("settings_overlay"))
             .fixed_pos(win_pos)
-            .order(egui::Order::Foreground)
+            .order(egui::Order::Tooltip)
             .show(ui.ctx(), |ui| {
                 egui::Frame::new()
                     .fill(theme::BG_CONTENT)
