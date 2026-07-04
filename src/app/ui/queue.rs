@@ -245,13 +245,13 @@ fn render_item(ui: &mut egui::Ui, item: &crate::download::queue::QueueItem) {
                             path,
                         } => {
                             ui.label(
-                                egui::RichText::new(format!("✓ {codec} {bitrate} kbps"))
+                                egui::RichText::new(format!("{codec} {bitrate} kbps"))
                                     .color(theme::SUCCESS),
                             )
                             .on_hover_text(path);
                         }
                         ItemState::Failed { error } => {
-                            ui.label(egui::RichText::new("✗ Ошибка").color(theme::ERROR))
+                            ui.label(egui::RichText::new("Ошибка").color(theme::ERROR))
                                 .on_hover_text(error);
                         }
                     },
