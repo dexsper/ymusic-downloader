@@ -4,7 +4,10 @@
 
 ## Интерфейс
 
-<img width="500" height="auto" alt="image" src="https://github.com/user-attachments/assets/cfccefc2-5708-4d52-b557-6f6a86f1cbb3" />
+<p>
+  <img src="assets/screenshots/main.png" width="48%" alt="Главный экран" />
+  <img src="assets/screenshots/settings.png" width="48%" alt="Настройки" />
+</p>
 
 ## Возможности
 
