@@ -1,6 +1,6 @@
 [package]
 name = "ymusic-downloader"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2024"
 description = "Native desktop client for downloading music from Yandex Music for personal offline listening by active subscribers"
 license = "MIT"
