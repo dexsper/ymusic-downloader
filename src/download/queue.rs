@@ -114,7 +114,10 @@ impl DownloadQueue {
 
             // Filter out tracks that are already recorded in the project.
             let jobs: Vec<TrackJob> = {
-                let downloaded = project.lock().map(|g| g.downloaded_ids.clone()).unwrap_or_default();
+                let downloaded = project
+                    .lock()
+                    .map(|g| g.downloaded_ids.clone())
+                    .unwrap_or_default();
                 jobs.into_iter()
                     .filter(|j| !downloaded.contains(&j.full_id))
                     .collect()
@@ -123,8 +126,7 @@ impl DownloadQueue {
             if jobs.is_empty() {
                 if let Ok(mut guard) = queue.state.lock() {
                     guard.resolving = false;
-                    guard.resolve_status =
-                        Some("Все треки уже есть в проекте.".to_owned());
+                    guard.resolve_status = Some("Все треки уже есть в проекте.".to_owned());
                 }
                 ctx.request_repaint();
                 return;
@@ -183,7 +185,7 @@ impl DownloadQueue {
 
                 let full_id = job.full_id.clone();
                 let result: Result<DownloadOutcome, _> =
-                    pipeline::download_track(client, http, job, config).await;
+                    pipeline::download_track(client, http, job, config, project.clone()).await;
 
                 match result {
                     Ok(outcome) => {

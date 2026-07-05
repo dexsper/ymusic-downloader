@@ -38,9 +38,9 @@ pub struct ProjectSettings {
     pub album_year_in_folder: bool,
     /// Prepend track index prefixes (`01 - `, `02 - `) to file names.
     pub track_indexing: bool,
-    /// Save `cover.jpg` inside each album folder (skipped if the file already exists).
+    /// Save `cover.jpg` inside each album folder; re-downloaded when the CDN URI changes.
     pub download_album_cover: bool,
-    /// Save `artist.jpg` inside each artist folder (skipped if the file already exists).
+    /// Save `artist.jpg` inside each artist folder; re-downloaded when the CDN URI changes.
     pub download_artist_image: bool,
 }
 
@@ -63,9 +63,10 @@ impl Default for ProjectSettings {
 struct ProjectFile {
     #[serde(flatten)]
     settings: ProjectSettings,
-    /// Composite track IDs (`id:albumId`) that have already been downloaded.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     downloaded_track_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    downloaded_image_uris: Vec<String>,
 }
 
 /// A loaded project: root directory + settings + already-downloaded ID set.
@@ -76,6 +77,9 @@ pub struct Project {
     pub settings: ProjectSettings,
     /// Composite track IDs already downloaded; used to skip re-downloads.
     pub downloaded_ids: HashSet<String>,
+    /// Raw CDN image URIs already downloaded; used to skip re-downloads while still
+    /// fetching updated images when the URI changes (e.g. artist updates their photo).
+    pub downloaded_image_uris: HashSet<String>,
 }
 
 impl Project {
@@ -93,11 +97,14 @@ impl Project {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => (ProjectFile::default(), false),
             Err(e) => return Err(e.into()),
         };
+
         let project = Self {
             root,
             settings: data.settings,
             downloaded_ids: data.downloaded_track_ids.into_iter().collect(),
+            downloaded_image_uris: data.downloaded_image_uris.into_iter().collect(),
         };
+
         if !existed {
             project.save()?;
         }
@@ -116,11 +123,17 @@ impl Project {
     /// Returns an error if the directory cannot be created or the file cannot be written.
     pub fn save(&self) -> Result<(), ProjectError> {
         std::fs::create_dir_all(&self.root)?;
-        let mut ids: Vec<&str> = self.downloaded_ids.iter().map(String::as_str).collect();
+
+        let mut ids: Vec<String> = self.downloaded_ids.iter().cloned().collect();
         ids.sort_unstable();
+
+        let mut uris: Vec<String> = self.downloaded_image_uris.iter().cloned().collect();
+        uris.sort_unstable();
+
         let data = ProjectFile {
             settings: self.settings.clone(),
-            downloaded_track_ids: ids.into_iter().map(str::to_owned).collect(),
+            downloaded_track_ids: ids,
+            downloaded_image_uris: uris,
         };
         let json = serde_json::to_string_pretty(&data)?;
         std::fs::write(self.root.join(PROJECT_FILE), json)?;
@@ -143,12 +156,24 @@ impl Project {
             tracing::warn!(%err, "failed to persist downloaded track ID");
         }
     }
+
+    /// Returns `true` if a folder image with this raw URI has already been downloaded.
+    #[must_use]
+    pub fn has_image_uri(&self, uri: &str) -> bool {
+        self.downloaded_image_uris.contains(uri)
+    }
+
+    /// Records a downloaded image URI and saves the project manifest.
+    pub fn record_image_uri(&mut self, uri: &str) {
+        self.downloaded_image_uris.insert(uri.to_owned());
+        if let Err(err) = self.save() {
+            tracing::warn!(%err, "failed to persist downloaded image URI");
+        }
+    }
 }
 
 /// Returns a short, human-readable name for a project path.
 #[must_use]
 pub fn path_display_name(path: &Path) -> &str {
-    path.file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("—")
+    path.file_name().and_then(|n| n.to_str()).unwrap_or("—")
 }

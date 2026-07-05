@@ -4,7 +4,7 @@
 //! Also handles expanding a user-supplied URL (track/album/playlist) into a list of tracks.
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use crate::api::client::ApiClient;
 use crate::api::models::Track;
@@ -13,6 +13,7 @@ use crate::api::{endpoints, urls};
 use crate::config::CoverSize;
 use crate::download::quality::{Quality, ResponseCodec};
 use crate::download::{decrypt, flac_mp4, naming};
+use crate::project::Project;
 use crate::tags::{self, TrackMetadata};
 
 /// Errors from the download pipeline.
@@ -162,6 +163,7 @@ pub async fn download_track(
     http: reqwest::Client,
     job: TrackJob,
     config: DownloadConfig,
+    project: Arc<Mutex<Project>>,
 ) -> Result<DownloadOutcome, PipelineError> {
     let info = endpoints::get_file_info(&client, &job.full_id, config.quality).await?;
     let url = info.urls.first().ok_or(PipelineError::NoDownloadUrl)?;
@@ -216,11 +218,19 @@ pub async fn download_track(
         let artist_dir = naming::build_artist_dir(&config.root, &meta);
 
         if config.download_album_cover {
-            save_album_cover_if_present(&http, &job.track, config.cover_size, &album_dir).await;
+            save_album_cover_if_present(&http, &job.track, config.cover_size, &album_dir, &project)
+                .await;
         }
 
         if config.download_artist_image {
-            save_artist_image_if_present(&http, &job.track, config.cover_size, &artist_dir).await;
+            save_artist_image_if_present(
+                &http,
+                &job.track,
+                config.cover_size,
+                &artist_dir,
+                &project,
+            )
+            .await;
         }
     }
 
@@ -236,9 +246,10 @@ async fn save_album_cover_if_present(
     track: &Track,
     size: CoverSize,
     album_dir: &Path,
+    project: &Mutex<Project>,
 ) {
     let Some(uri) = track.cover_uri() else { return };
-    save_folder_image_if_absent(http, uri, size, &album_dir.join("cover.jpg")).await;
+    save_folder_image_by_uri(http, uri, size, &album_dir.join("cover.jpg"), project).await;
 }
 
 async fn save_artist_image_if_present(
@@ -246,38 +257,44 @@ async fn save_artist_image_if_present(
     track: &Track,
     size: CoverSize,
     artist_dir: &Path,
+    project: &Mutex<Project>,
 ) {
     let Some(artist) = track.artists.first() else {
         return;
     };
-
     let Some(uri) = artist.cover_uri() else {
         return;
     };
-
-    save_folder_image_if_absent(http, uri, size, &artist_dir.join("artist.jpg")).await;
+    save_folder_image_by_uri(http, uri, size, &artist_dir.join("artist.jpg"), project).await;
 }
 
-/// Downloads a folder image only when the destination does not yet exist, preventing redundant
-/// CDN requests when multiple tracks share the same folder.
-async fn save_folder_image_if_absent(
+/// Downloads a folder image only when its CDN URI has not been seen before in this project.
+///
+/// Unlike a file-existence check, this approach detects when the remote image is updated
+/// (the CDN URI changes) and fetches the new version, overwriting the old file.
+async fn save_folder_image_by_uri(
     http: &reqwest::Client,
-    cover_uri: &str,
+    uri: &str,
     size: CoverSize,
     dest: &Path,
+    project: &Mutex<Project>,
 ) {
-    match tokio::fs::try_exists(dest).await {
-        Ok(true) => return,
-        Ok(false) => {}
-        Err(err) => {
-            tracing::warn!(%err, path = %dest.display(), "could not stat folder image path");
-            return;
-        }
+    if project
+        .lock()
+        .map(|g| g.has_image_uri(uri))
+        .unwrap_or(false)
+    {
+        return;
     }
-    match fetch_cover(http, cover_uri, size).await {
+
+    match fetch_cover(http, uri, size).await {
         Ok(bytes) => {
             if let Err(err) = tokio::fs::write(dest, &bytes).await {
                 tracing::warn!(%err, path = %dest.display(), "failed to write folder image");
+                return;
+            }
+            if let Ok(mut guard) = project.lock() {
+                guard.record_image_uri(uri);
             }
         }
         Err(err) => tracing::warn!(%err, "failed to download folder image"),
