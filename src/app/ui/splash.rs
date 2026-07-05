@@ -1,14 +1,16 @@
-//! Splash screen: displays the Yandex Music logo for ~2 s, then routes based on auth status.
+//! Splash screen: loads the logo texture, draws it stationary at the centre, then routes
+//! based on auth status — kicking off the logo animation towards the next screen.
 
 use std::time::Duration;
 
 use crate::app::ui::auth::AuthStatus;
-use crate::app::{Screen, YmdApp, theme};
+use crate::app::ui::widgets;
+use crate::app::{LogoAnim, LogoTarget, Screen, YmdApp, theme};
 
 const SPLASH_DURATION: Duration = Duration::from_millis(2000);
-const LOGO_MAX_WIDTH: f32 = 280.0;
 
 pub fn show(ui: &mut egui::Ui, app: &mut YmdApp) {
+    // Load logo texture once.
     if app.logo_texture.is_none() {
         let bytes: &[u8] = include_bytes!("../../../assets/logo.png");
         match image::load_from_memory(bytes) {
@@ -26,22 +28,14 @@ pub fn show(ui: &mut egui::Ui, app: &mut YmdApp) {
         }
     }
 
+    // Keep logo_anim at Splash while on this screen.
+    app.logo_anim = LogoAnim::snap(LogoTarget::Splash);
+
+    let layer = egui::LayerId::new(egui::Order::Middle, egui::Id::new("logo"));
+    widgets::draw_logo(ui.ctx(), app, layer);
+
     let rect = ui.max_rect();
     let center = rect.center();
-
-    if let Some(tex) = &app.logo_texture {
-        let tex_size = tex.size_vec2();
-        let scale = (LOGO_MAX_WIDTH / tex_size.x).min(1.0);
-        let display = tex_size * scale;
-        let img_rect = egui::Rect::from_center_size(center, display);
-        ui.painter().image(
-            tex.id(),
-            img_rect,
-            egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
-            egui::Color32::WHITE,
-        );
-    }
-
     let elapsed = app.splash_start.elapsed();
 
     if elapsed >= SPLASH_DURATION {
@@ -53,25 +47,29 @@ pub fn show(ui: &mut egui::Ui, app: &mut YmdApp) {
             .unwrap_or_default();
 
         match status {
-            // Keep showing dots while the background token check is still running.
             AuthStatus::CheckingToken => {
-                let dot_y = center.y + LOGO_MAX_WIDTH * 0.18 + 32.0;
+                let dot_y = center.y + 280.0 * 0.18 + 32.0;
                 draw_dots(ui, center.x, dot_y, elapsed);
                 ui.ctx().request_repaint_after(Duration::from_millis(16));
             }
             AuthStatus::SignedIn(_) => {
-                app.main_started = std::time::Instant::now();
-                app.screen = Screen::Main;
+                // Logo flies from splash centre → auth-centre position, then project picker
+                // takes over and draws it from wherever it currently is.
+                app.logo_anim =
+                    LogoAnim::animate(LogoTarget::Splash, LogoTarget::AuthCenter, 0.55);
+                app.screen = Screen::ProjectPicker;
                 ui.ctx().request_repaint();
             }
             _ => {
+                app.logo_anim =
+                    LogoAnim::animate(LogoTarget::Splash, LogoTarget::AuthCenter, 0.55);
                 app.auth_started = std::time::Instant::now();
                 app.screen = Screen::Auth;
                 ui.ctx().request_repaint();
             }
         }
     } else {
-        let dot_y = center.y + LOGO_MAX_WIDTH * 0.18 + 32.0;
+        let dot_y = center.y + 280.0 * 0.18 + 32.0;
         draw_dots(ui, center.x, dot_y, elapsed);
         ui.ctx().request_repaint_after(Duration::from_millis(16));
     }

@@ -4,6 +4,7 @@ use egui_material_icons::icons::ICON_SEARCH;
 
 use crate::app::YmdApp;
 use crate::app::theme;
+use crate::download::pipeline::DownloadConfig;
 use crate::download::queue::ItemState;
 
 const LINK_INPUT_HEIGHT: f32 = 44.0;
@@ -12,14 +13,6 @@ const LINK_INPUT_ICON_GAP: f32 = 10.0;
 const LINK_INPUT_CORNER: f32 = 10.0;
 
 pub fn show(ui: &mut egui::Ui, app: &mut YmdApp) {
-    if app.settings.download_dir.is_none() {
-        ui.colored_label(
-            theme::WARNING,
-            "Не выбрана папка для загрузок — задайте её в «Настройках».",
-        );
-        ui.add_space(8.0);
-    }
-
     ui.horizontal(|ui| {
         let hint = "https://music.yandex.ru/album/… , /track/… или /playlist/…";
         let field_width = ui.available_width() - 160.0;
@@ -33,14 +26,7 @@ pub fn show(ui: &mut egui::Ui, app: &mut YmdApp) {
         if submit {
             let input = app.link_input.trim().to_owned();
             if !input.is_empty() {
-                app.link_input.clear();
-                app.queue.enqueue_link(
-                    &app.runtime,
-                    app.api_client.clone(),
-                    app.settings.clone(),
-                    input,
-                    app.egui_ctx.clone(),
-                );
+                submit_link(app, input);
             }
         }
     });
@@ -133,8 +119,6 @@ pub fn show(ui: &mut egui::Ui, app: &mut YmdApp) {
         });
 }
 
-/// Link input field styled like the original Yandex Music search bar: transparent background
-/// with a thin outline at rest, thicker outline with a subtle fill on focus, and a search icon.
 fn link_input_field(
     ui: &mut egui::Ui,
     text: &mut String,
@@ -207,18 +191,15 @@ fn render_skeleton_row(ui: &mut egui::Ui, index: usize) {
         .show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.vertical(|ui| {
-                    // Title placeholder — same height as a default strong label
                     let (r, _) =
                         ui.allocate_exact_size(egui::vec2(180.0, 16.0), egui::Sense::hover());
                     ui.painter().rect_filled(r, 4.0, bar);
                     ui.add_space(4.0);
-                    // Artist placeholder — same height as a 12px label
                     let (r, _) =
                         ui.allocate_exact_size(egui::vec2(100.0, 11.0), egui::Sense::hover());
                     ui.painter().rect_filled(r, 3.0, bar);
                 });
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    // Status placeholder
                     let (r, _) =
                         ui.allocate_exact_size(egui::vec2(64.0, 12.0), egui::Sense::hover());
                     ui.painter().rect_filled(r, 3.0, bar);
@@ -280,4 +261,34 @@ fn render_item(ui: &mut egui::Ui, item: &crate::download::queue::QueueItem) {
             });
         });
     ui.add_space(6.0);
+}
+
+fn submit_link(app: &mut YmdApp, input: String) {
+    let Some(proj_arc) = app.current_project.clone() else {
+        return;
+    };
+
+    let Ok(proj) = proj_arc.lock() else { return };
+    let config = DownloadConfig {
+        quality: proj.settings.quality,
+        cover_size: proj.settings.cover_size,
+        max_parallel_downloads: app.settings.max_parallel_downloads,
+        root: proj.root.clone(),
+        smart_library_organization: proj.settings.smart_library_organization,
+        album_year_in_folder: proj.settings.album_year_in_folder,
+        track_indexing: proj.settings.track_indexing,
+        download_album_cover: proj.settings.download_album_cover,
+        download_artist_image: proj.settings.download_artist_image,
+    };
+
+    drop(proj);
+    app.link_input.clear();
+    app.queue.enqueue_link(
+        &app.runtime,
+        app.api_client.clone(),
+        config,
+        proj_arc,
+        input,
+        app.egui_ctx.clone(),
+    );
 }

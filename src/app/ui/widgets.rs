@@ -1,10 +1,17 @@
-//! Shared UI widgets: window control buttons rendered as a global overlay.
+//! Shared UI widgets: window control buttons and the unified logo renderer.
 
 use egui_material_icons::icons::{
     ICON_CLOSE, ICON_CROP_SQUARE, ICON_FILTER_NONE, ICON_HORIZONTAL_RULE,
 };
 
-use crate::app::theme;
+use crate::app::{LogoTarget, YmdApp, theme};
+
+/// Vertical distance from title-bar bottom to logo centre on auth/project screens.
+const AUTH_LOGO_CY_OFFSET: f32 = 72.0;
+/// Horizontal padding from sidebar edge for the sidebar logo.
+const SIDEBAR_LOGO_PAD: f32 = 20.0;
+/// Vertical padding from title-bar bottom to sidebar logo top edge.
+const SIDEBAR_LOGO_TOP_PAD: f32 = 30.0;
 
 /// Height of the custom title bar in pixels.
 pub const TITLE_H: f32 = 30.0;
@@ -17,8 +24,68 @@ pub fn lerp(a: f32, b: f32, t: f32) -> f32 {
     a + (b - a) * t
 }
 
-pub fn ease_out_quart(t: f32) -> f32 {
-    1.0 - (1.0 - t).powi(4)
+
+/// Draws the logo using the app's unified [`crate::app::LogoAnim`] state.
+///
+/// Pass `layer` to control Z-ordering; use [`egui::Order::Middle`] for most screens
+/// so the logo sits below foreground overlays and islands.
+pub fn draw_logo(ctx: &egui::Context, app: &YmdApp, layer: egui::LayerId) {
+    let Some(tex) = &app.logo_texture else { return };
+    let tex_size = tex.size_vec2();
+    let screen = ctx.input(|i| i.viewport_rect());
+
+    let te = app.logo_anim.ease();
+
+    let (from_center, from_display) = logo_abs_pos(app.logo_anim.from, screen, tex_size);
+    let (to_center, to_display) = logo_abs_pos(app.logo_anim.to, screen, tex_size);
+
+    let center = egui::pos2(
+        lerp(from_center.x, to_center.x, te),
+        lerp(from_center.y, to_center.y, te),
+    );
+    let display = egui::vec2(
+        lerp(from_display.x, to_display.x, te),
+        lerp(from_display.y, to_display.y, te),
+    );
+
+    ctx.layer_painter(layer).image(
+        tex.id(),
+        egui::Rect::from_center_size(center, display),
+        egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+        egui::Color32::WHITE,
+    );
+
+    if !app.logo_anim.is_done() {
+        ctx.request_repaint();
+    }
+}
+
+/// Computes the absolute (viewport-space) center and size for a [`LogoTarget`].
+fn logo_abs_pos(
+    target: LogoTarget,
+    screen: egui::Rect,
+    tex_size: egui::Vec2,
+) -> (egui::Pos2, egui::Vec2) {
+    match target {
+        LogoTarget::Splash => {
+            let w = 280.0f32;
+            let display = tex_size * (w / tex_size.x);
+            (screen.center(), display)
+        }
+        LogoTarget::AuthCenter => {
+            let w = 240.0f32;
+            let display = tex_size * (w / tex_size.x);
+            let cy = TITLE_H + AUTH_LOGO_CY_OFFSET;
+            (egui::pos2(screen.center().x, cy), display)
+        }
+        LogoTarget::Sidebar => {
+            let w = SIDEBAR_W - SIDEBAR_LOGO_PAD * 2.0;
+            let display = tex_size * (w / tex_size.x);
+            let cx = SIDEBAR_W / 2.0;
+            let cy = TITLE_H + SIDEBAR_LOGO_TOP_PAD + display.y * 0.5;
+            (egui::pos2(cx, cy), display)
+        }
+    }
 }
 
 /// Draws the three window control buttons (minimize / maximize / close) as a

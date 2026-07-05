@@ -4,6 +4,7 @@ mod api;
 mod app;
 mod config;
 mod download;
+mod project;
 mod tags;
 
 fn load_icon() -> egui::IconData {

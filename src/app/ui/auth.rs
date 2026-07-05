@@ -386,31 +386,17 @@ pub fn show_island(ctx: &egui::Context, app: &mut YmdApp) {
                                     .strong()
                                     .color(theme::TEXT_PRIMARY),
                             );
-                            if let Some(login) = &info.login {
-                                if *login != name {
-                                    ui.label(
-                                        egui::RichText::new(login)
-                                            .color(theme::TEXT_MUTED)
-                                            .size(12.0),
-                                    );
-                                }
+                            if let Some(login) = &info.login
+                                && *login != name
+                            {
+                                ui.label(
+                                    egui::RichText::new(login)
+                                        .color(theme::TEXT_MUTED)
+                                        .size(12.0),
+                                );
                             }
                             ui.add_space(8.0);
                         }
-                        let settings_btn = egui::Button::new(
-                            egui::RichText::new("Настройки").color(theme::TEXT_PRIMARY),
-                        )
-                        .fill(theme::SECONDARY_BG);
-                        if ui
-                            .add_sized([ui.available_width(), 30.0], settings_btn)
-                            .clicked()
-                        {
-                            app.show_settings = true;
-                            app.show_account_popup = false;
-                        }
-
-                        ui.add_space(4.0);
-
                         let sign_out_btn = egui::Button::new(
                             egui::RichText::new("Выйти").color(theme::TEXT_PRIMARY),
                         )
@@ -421,6 +407,7 @@ pub fn show_island(ctx: &egui::Context, app: &mut YmdApp) {
                         {
                             sign_out(app);
                             app.show_account_popup = false;
+                            app.current_project = None;
                             app.screen = crate::app::Screen::Auth;
                             app.auth_started = std::time::Instant::now();
                         }

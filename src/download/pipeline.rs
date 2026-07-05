@@ -3,15 +3,15 @@
 //!
 //! Also handles expanding a user-supplied URL (track/album/playlist) into a list of tracks.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use crate::api::client::ApiClient;
 use crate::api::models::Track;
 use crate::api::urls::ResourceLink;
 use crate::api::{endpoints, urls};
-use crate::config::{CoverSize, Settings};
-use crate::download::quality::ResponseCodec;
+use crate::config::CoverSize;
+use crate::download::quality::{Quality, ResponseCodec};
 use crate::download::{decrypt, flac_mp4, naming};
 use crate::tags::{self, TrackMetadata};
 
@@ -36,8 +36,23 @@ pub enum PipelineError {
     NoDownloadUrl,
     #[error("unknown codec in response: {0}")]
     UnknownCodec(String),
-    #[error("no download directory configured")]
-    NoDownloadDir,
+}
+
+/// Combined download parameters assembled from global settings + project settings.
+/// Passed to [`download_track`] so the pipeline is independent of both `Settings`
+/// and `Project` directly.
+#[derive(Debug, Clone)]
+pub struct DownloadConfig {
+    pub quality: Quality,
+    pub cover_size: CoverSize,
+    pub max_parallel_downloads: usize,
+    /// Project root directory; all output files are placed inside it.
+    pub root: PathBuf,
+    pub smart_library_organization: bool,
+    pub album_year_in_folder: bool,
+    pub track_indexing: bool,
+    pub download_album_cover: bool,
+    pub download_artist_image: bool,
 }
 
 /// A single download job: full track metadata plus the composite `id:albumId` for the API.
@@ -146,15 +161,9 @@ pub async fn download_track(
     client: Arc<ApiClient>,
     http: reqwest::Client,
     job: TrackJob,
-    settings: Settings,
+    config: DownloadConfig,
 ) -> Result<DownloadOutcome, PipelineError> {
-    let quality = settings.quality;
-    let download_dir = settings
-        .download_dir
-        .clone()
-        .ok_or(PipelineError::NoDownloadDir)?;
-
-    let info = endpoints::get_file_info(&client, &job.full_id, quality).await?;
+    let info = endpoints::get_file_info(&client, &job.full_id, config.quality).await?;
     let url = info.urls.first().ok_or(PipelineError::NoDownloadUrl)?;
     let codec = ResponseCodec::parse(&info.codec)
         .ok_or_else(|| PipelineError::UnknownCodec(info.codec.clone()))?;
@@ -176,18 +185,18 @@ pub async fn download_track(
 
     let mut meta = TrackMetadata::from_track(&job.track, job.total_tracks);
     if let Some(cover_uri) = job.track.cover_uri() {
-        match fetch_cover(&http, cover_uri, settings.cover_size).await {
+        match fetch_cover(&http, cover_uri, config.cover_size).await {
             Ok(cover) => meta.cover_bytes = Some(cover),
             Err(err) => tracing::warn!(%err, "failed to download cover art"),
         }
     }
 
     let path = naming::build_path(
-        &download_dir,
+        &config.root,
         &meta,
-        settings.smart_library_organization,
-        settings.album_year_in_folder,
-        settings.track_indexing,
+        config.smart_library_organization,
+        config.album_year_in_folder,
+        config.track_indexing,
         codec.file_extension(),
     );
 
@@ -202,35 +211,16 @@ pub async fn download_track(
         .await
         .expect("tagging task must not panic")?;
 
-    if settings.smart_library_organization {
-        let album_dir =
-            naming::build_album_dir(&download_dir, &meta, settings.album_year_in_folder);
-        let artist_dir = naming::build_artist_dir(&download_dir, &meta);
+    if config.smart_library_organization {
+        let album_dir = naming::build_album_dir(&config.root, &meta, config.album_year_in_folder);
+        let artist_dir = naming::build_artist_dir(&config.root, &meta);
 
-        if settings.download_album_cover {
-            if let Some(cover_uri) = job.track.cover_uri() {
-                save_folder_image_if_absent(
-                    &http,
-                    cover_uri,
-                    settings.cover_size,
-                    &album_dir.join("cover.jpg"),
-                )
-                .await;
-            }
+        if config.download_album_cover {
+            save_album_cover_if_present(&http, &job.track, config.cover_size, &album_dir).await;
         }
 
-        if settings.download_artist_image {
-            if let Some(artist) = job.track.artists.first() {
-                if let Some(cover_uri) = artist.cover_uri() {
-                    save_folder_image_if_absent(
-                        &http,
-                        cover_uri,
-                        settings.cover_size,
-                        &artist_dir.join("artist.jpg"),
-                    )
-                    .await;
-                }
-            }
+        if config.download_artist_image {
+            save_artist_image_if_present(&http, &job.track, config.cover_size, &artist_dir).await;
         }
     }
 
@@ -241,13 +231,40 @@ pub async fn download_track(
     })
 }
 
-/// Downloads a folder image (artist photo or album cover) only when the destination file does
-/// not yet exist — prevents redundant CDN requests when multiple tracks share the same folder.
+async fn save_album_cover_if_present(
+    http: &reqwest::Client,
+    track: &Track,
+    size: CoverSize,
+    album_dir: &Path,
+) {
+    let Some(uri) = track.cover_uri() else { return };
+    save_folder_image_if_absent(http, uri, size, &album_dir.join("cover.jpg")).await;
+}
+
+async fn save_artist_image_if_present(
+    http: &reqwest::Client,
+    track: &Track,
+    size: CoverSize,
+    artist_dir: &Path,
+) {
+    let Some(artist) = track.artists.first() else {
+        return;
+    };
+
+    let Some(uri) = artist.cover_uri() else {
+        return;
+    };
+
+    save_folder_image_if_absent(http, uri, size, &artist_dir.join("artist.jpg")).await;
+}
+
+/// Downloads a folder image only when the destination does not yet exist, preventing redundant
+/// CDN requests when multiple tracks share the same folder.
 async fn save_folder_image_if_absent(
     http: &reqwest::Client,
     cover_uri: &str,
     size: CoverSize,
-    dest: &std::path::Path,
+    dest: &Path,
 ) {
     match tokio::fs::try_exists(dest).await {
         Ok(true) => return,

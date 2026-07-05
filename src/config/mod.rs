@@ -1,10 +1,11 @@
-//! Application settings: download quality, library organization, authentication, and JSON persistence.
+//! Global application settings: authentication, parallel-download limit, and recent-project list.
+//!
+//! Per-project settings (quality, cover resolution, smart organization, etc.) live in the
+//! project manifest (`Project` / `ProjectSettings` in `crate::project`).
 
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
-
-use crate::download::quality::Quality;
 
 /// Errors reading or writing the configuration file.
 #[derive(Debug, thiserror::Error)]
@@ -18,8 +19,10 @@ pub enum ConfigError {
 }
 
 /// Resolution of the cover art embedded into audio tags.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[derive(Default)]
+///
+/// Kept in `config` rather than `project` because it is referenced by both the pipeline
+/// and the project settings; re-exporting it from here keeps import paths short.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum CoverSize {
     #[serde(rename = "200")]
     Px200,
@@ -48,11 +51,10 @@ impl CoverSize {
     }
 }
 
-
 /// Authorization data persisted between application restarts.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct AuthState {
-    /// OAuth token (entered manually or obtained via Device Code Flow).
+    /// OAuth token (obtained via Device Code Flow).
     pub token: Option<String>,
     /// Random UUIDv4 sent in the `X-Yandex-Music-Device` header.
     pub device_uuid: Option<String>,
@@ -60,30 +62,14 @@ pub struct AuthState {
     pub device_id: Option<String>,
 }
 
-/// User-configurable application settings persisted in `%APPDATA%/ymusic-downloader/config.json`.
+/// Global application settings persisted in `%APPDATA%/ymusic-downloader/config.json`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
-    /// Whether the user has accepted the legal disclaimer.
-    pub disclaimer_accepted: bool,
-    /// Default download quality.
-    pub quality: Quality,
-    /// Resolution of cover art embedded into tags.
-    pub cover_size: CoverSize,
-    /// Organize downloads as `{Artist}/{Album}/Disc N/{index} - {Title}.ext`.
-    pub smart_library_organization: bool,
-    /// Append the release year to the album folder name: `Album (Year)`.
-    pub album_year_in_folder: bool,
-    /// Prepend track index prefixes (`01 - `, `02 - `) to file names.
-    pub track_indexing: bool,
-    /// Save `cover.jpg` inside each album folder (skipped if the file already exists).
-    pub download_album_cover: bool,
-    /// Save `artist.jpg` inside each artist folder (skipped if the file already exists).
-    pub download_artist_image: bool,
-    /// Folder where downloaded files are saved.
-    pub download_dir: Option<PathBuf>,
     /// Maximum number of concurrent downloads.
     pub max_parallel_downloads: usize,
+    /// Paths of recently opened projects, newest first.
+    pub recent_projects: Vec<PathBuf>,
     /// Authorization data.
     pub auth: AuthState,
 }
@@ -91,16 +77,8 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            disclaimer_accepted: false,
-            quality: Quality::default(),
-            cover_size: CoverSize::default(),
-            smart_library_organization: true,
-            album_year_in_folder: true,
-            track_indexing: true,
-            download_album_cover: true,
-            download_artist_image: true,
-            download_dir: dirs::audio_dir().or_else(dirs::download_dir),
             max_parallel_downloads: 3,
+            recent_projects: Vec::new(),
             auth: AuthState::default(),
         }
     }
@@ -143,5 +121,12 @@ impl Settings {
         let contents = serde_json::to_string_pretty(self)?;
         std::fs::write(path, contents)?;
         Ok(())
+    }
+
+    /// Prepends `path` to `recent_projects`, deduplicating and capping the list at 10 entries.
+    pub fn push_recent_project(&mut self, path: PathBuf) {
+        self.recent_projects.retain(|p| p != &path);
+        self.recent_projects.insert(0, path);
+        self.recent_projects.truncate(10);
     }
 }

@@ -1,5 +1,6 @@
 //! Download queue manager: link resolution, parallel download scheduling with a semaphore,
-//! and progress state shared with the UI thread.
+//! duplicate filtering via the project's downloaded-ID set, and progress state shared with
+//! the UI thread.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -7,8 +8,8 @@ use std::sync::{Arc, Mutex};
 use tokio::sync::Semaphore;
 
 use crate::api::client::ApiClient;
-use crate::config::Settings;
-use crate::download::pipeline::{self, DownloadOutcome, TrackJob};
+use crate::download::pipeline::{self, DownloadConfig, DownloadOutcome, TrackJob};
+use crate::project::Project;
 
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -80,13 +81,14 @@ impl DownloadQueue {
         }
     }
 
-    /// Submits a user-supplied URL for processing: resolves it to tracks and starts parallel
-    /// downloads. Does not block the calling (UI) thread.
+    /// Submits a user-supplied URL for processing: resolves it to tracks, filters already-
+    /// downloaded ones, and starts parallel downloads. Does not block the calling (UI) thread.
     pub fn enqueue_link(
         &self,
         runtime: &tokio::runtime::Runtime,
         client: Arc<ApiClient>,
-        settings: Settings,
+        config: DownloadConfig,
+        project: Arc<Mutex<Project>>,
         input: String,
         ctx: egui::Context,
     ) {
@@ -110,23 +112,33 @@ impl DownloadQueue {
                 }
             };
 
+            // Filter out tracks that are already recorded in the project.
+            let jobs: Vec<TrackJob> = {
+                let downloaded = project.lock().map(|g| g.downloaded_ids.clone()).unwrap_or_default();
+                jobs.into_iter()
+                    .filter(|j| !downloaded.contains(&j.full_id))
+                    .collect()
+            };
+
             if jobs.is_empty() {
                 if let Ok(mut guard) = queue.state.lock() {
                     guard.resolving = false;
-                    guard.resolve_status = Some("По ссылке не найдено треков.".to_owned());
+                    guard.resolve_status =
+                        Some("Все треки уже есть в проекте.".to_owned());
                 }
                 ctx.request_repaint();
                 return;
             }
 
-            queue.run_jobs(client, settings, jobs, ctx).await;
+            queue.run_jobs(client, config, project, jobs, ctx).await;
         });
     }
 
     async fn run_jobs(
         &self,
         client: Arc<ApiClient>,
-        settings: Settings,
+        config: DownloadConfig,
+        project: Arc<Mutex<Project>>,
         jobs: Vec<TrackJob>,
         ctx: egui::Context,
     ) {
@@ -147,7 +159,7 @@ impl DownloadQueue {
         }
         ctx.request_repaint();
 
-        let permits = settings.max_parallel_downloads.max(1);
+        let permits = config.max_parallel_downloads.max(1);
         let semaphore = Arc::new(Semaphore::new(permits));
         let http = reqwest::Client::new();
         let mut handles = Vec::new();
@@ -157,7 +169,8 @@ impl DownloadQueue {
             let queue = self.clone();
             let client = client.clone();
             let http = http.clone();
-            let settings = settings.clone();
+            let config = config.clone();
+            let project = project.clone();
             let ctx = ctx.clone();
 
             handles.push(tokio::spawn(async move {
@@ -168,18 +181,25 @@ impl DownloadQueue {
                 queue.set_item_state(id, ItemState::Downloading);
                 ctx.request_repaint();
 
+                let full_id = job.full_id.clone();
                 let result: Result<DownloadOutcome, _> =
-                    pipeline::download_track(client, http, job, settings).await;
+                    pipeline::download_track(client, http, job, config).await;
 
                 match result {
-                    Ok(outcome) => queue.set_item_state(
-                        id,
-                        ItemState::Done {
-                            path: outcome.path.display().to_string(),
-                            codec: format!("{:?}", outcome.codec),
-                            bitrate: outcome.bitrate,
-                        },
-                    ),
+                    Ok(outcome) => {
+                        // Persist the downloaded track ID so future sessions skip it.
+                        if let Ok(mut guard) = project.lock() {
+                            guard.record_downloaded(&full_id);
+                        }
+                        queue.set_item_state(
+                            id,
+                            ItemState::Done {
+                                path: outcome.path.display().to_string(),
+                                codec: format!("{:?}", outcome.codec),
+                                bitrate: outcome.bitrate,
+                            },
+                        );
+                    }
                     Err(err) => queue.set_item_state(
                         id,
                         ItemState::Failed {

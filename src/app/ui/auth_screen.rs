@@ -1,21 +1,20 @@
 //! Auth screen: shown when the user is not signed in.
 //!
-//! The logo animates from the centre (splash position) to the upper area of the
-//! screen, then a login prompt fades in below it.
+//! The logo is drawn by the unified [`widgets::draw_logo`] system (it is already flying from
+//! Splash → AuthCenter, started by the splash screen). This screen only handles the content
+//! fade-in (prompt text and sign-in button) via its own `auth_started` timer.
 
 use std::time::Duration;
 
 use crate::app::ui::auth::{self, AuthStatus};
+use crate::app::ui::widgets;
 use crate::app::{Screen, YmdApp, theme};
 
-/// Duration of the logo fly-up animation.
-const ANIM_SECS: f32 = 0.55;
-/// Logo width at animation start (matches splash screen size).
-const LOGO_W_START: f32 = 280.0;
-/// Logo width at animation end.
-const LOGO_W_END: f32 = 240.0;
+/// Duration of the content fade-in animation (text + button).
+const FADE_SECS: f32 = 0.55;
 
 pub fn show(ui: &mut egui::Ui, app: &mut YmdApp) {
+    // Persist incoming token.
     let pending = app
         .auth_ui
         .token_to_persist
@@ -35,37 +34,24 @@ pub fn show(ui: &mut egui::Ui, app: &mut YmdApp) {
         .unwrap_or_default();
 
     if matches!(status, AuthStatus::SignedIn(_)) {
-        app.main_started = std::time::Instant::now();
-        app.screen = Screen::Main;
+        // Logo animation continues — it is already heading to AuthCenter.
+        // Project picker draws it from whatever position it has reached.
+        app.screen = Screen::ProjectPicker;
         ui.ctx().request_repaint();
         return;
     }
 
-    let t = (app.auth_started.elapsed().as_secs_f32() / ANIM_SECS).min(1.0);
-    let te = ease_out_quart(t);
+    // Draw logo at its animated position (Splash → AuthCenter, driven by logo_anim).
+    let layer = egui::LayerId::new(egui::Order::Middle, egui::Id::new("logo"));
+    widgets::draw_logo(ui.ctx(), app, layer);
 
-    let rect = ui.max_rect();
-    let cx = rect.center().x;
-
-    let logo_w = lerp(LOGO_W_START, LOGO_W_END, te);
-    let logo_cy = lerp(rect.center().y, rect.min.y + 72.0, te);
-
-    if let Some(tex) = &app.logo_texture {
-        let tex_size = tex.size_vec2();
-        let scale = logo_w / tex_size.x;
-        let display = tex_size * scale;
-        ui.painter().image(
-            tex.id(),
-            egui::Rect::from_center_size(egui::pos2(cx, logo_cy), display),
-            egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
-            egui::Color32::WHITE,
-        );
-    }
-
-    // Content fades in during the second half of the animation; pinned to the
-    // screen centre so it stays put regardless of the logo's final position.
+    // Content fades in after the logo animation settles (~0.45 s in).
+    let t = (app.auth_started.elapsed().as_secs_f32() / FADE_SECS).min(1.0);
     let fade = ((t - 0.45) / 0.55).clamp(0.0, 1.0);
+
     if fade > 0.0 {
+        let rect = ui.max_rect();
+        let cx = rect.center().x;
         let alpha = (fade * 255.0) as u8;
 
         let heading_color = egui::Color32::from_rgba_unmultiplied(0xe6, 0xe6, 0xe6, alpha);
@@ -120,7 +106,6 @@ pub fn show(ui: &mut egui::Ui, app: &mut YmdApp) {
                     code_color,
                 );
 
-                // Clicking the code copies it; cursor changes to indicate interactivity.
                 let code_resp = ui.interact(
                     egui::Rect::from_center_size(
                         egui::pos2(cx, code_top + code_galley.height() * 0.5),
@@ -185,12 +170,4 @@ pub fn show(ui: &mut egui::Ui, app: &mut YmdApp) {
     if t < 1.0 {
         ui.ctx().request_repaint_after(Duration::from_millis(16));
     }
-}
-
-fn lerp(a: f32, b: f32, t: f32) -> f32 {
-    a + (b - a) * t
-}
-
-fn ease_out_quart(t: f32) -> f32 {
-    1.0 - (1.0 - t).powi(4)
 }
